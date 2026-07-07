@@ -12,6 +12,7 @@ bin/
 # Coverage output
 *.out
 coverage.out
+dist/
 
 # Go workspace and vendoring (optional outputs)
 go.work
