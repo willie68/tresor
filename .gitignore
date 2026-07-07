@@ -13,6 +13,9 @@ bin/
 *.out
 coverage.out
 dist/
+testdata/vault.tre
+testdata/output/**
+!testdata/output/.gitkeep
 
 # Go workspace and vendoring (optional outputs)
 go.work

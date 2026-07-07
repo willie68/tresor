@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"strings"
+
+	"tresor/internal/tresor"
 
 	"github.com/spf13/cobra"
 )
@@ -10,6 +13,7 @@ type decryptOptions struct {
 	password string
 	remove   bool
 	file     string
+	conflict string
 }
 
 func newDecryptCmd() *cobra.Command {
@@ -20,7 +24,30 @@ func newDecryptCmd() *cobra.Command {
 		Short: "Recursively decrypt a container file into directories in the working directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("[stub] decrypt called with file=%q remove=%t\n", opts.file, opts.remove)
+			password, err := resolveDecryptPassword(opts.password)
+			if err != nil {
+				return err
+			}
+
+			handler, err := conflictHandlerFromFlag(opts.conflict)
+			if err != nil {
+				return err
+			}
+
+			err = tresor.Decrypt(tresor.DecryptOptions{
+				Password:        password,
+				ContainerPath:   opts.file,
+				RemoveContainer: opts.remove,
+				OnFileConflict:  handler,
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("decrypted container %q into current working directory\n", opts.file)
+			if opts.remove {
+				fmt.Println("container file was removed after successful decryption")
+			}
 			return nil
 		},
 	}
@@ -28,11 +55,32 @@ func newDecryptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
 	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove container file after successful decryption")
 	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre)")
+	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|change")
 
-	_ = cmd.MarkFlagRequired("password")
 	_ = cmd.MarkFlagRequired("file")
 
 	return cmd
+}
+
+func conflictHandlerFromFlag(mode string) (tresor.FileConflictHandler, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "prompt":
+		return nil, nil
+	case "ignore":
+		return func(targetPath string) (tresor.FileConflictAction, error) {
+			return tresor.ConflictIgnore, nil
+		}, nil
+	case "overwrite":
+		return func(targetPath string) (tresor.FileConflictAction, error) {
+			return tresor.ConflictOverwrite, nil
+		}, nil
+	case "change":
+		return func(targetPath string) (tresor.FileConflictAction, error) {
+			return tresor.ConflictChange, nil
+		}, nil
+	default:
+		return nil, fmt.Errorf("invalid --on-conflict value %q (use: prompt|ignore|overwrite|change)", mode)
+	}
 }
 
 func init() {
