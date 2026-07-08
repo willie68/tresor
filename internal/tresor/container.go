@@ -48,6 +48,7 @@ type EncryptOptions struct {
 	RemoveSources  bool
 	IfExists       string
 	OnFileConflict FileConflictHandler
+	ProgressWriter io.Writer
 }
 
 type DecryptOptions struct {
@@ -55,6 +56,7 @@ type DecryptOptions struct {
 	ContainerPath   string
 	RemoveContainer bool
 	OnFileConflict  FileConflictHandler
+	ProgressWriter  io.Writer
 }
 
 type ListOptions struct {
@@ -127,6 +129,8 @@ func Encrypt(opts EncryptOptions) error {
 		return fmt.Errorf("check container file: %w", statErr)
 	}
 
+	progressf(opts.ProgressWriter, "encrypt: mode=%s container=%q", mode, opts.ContainerPath)
+
 	if !exists || mode == "sync" {
 		return encryptSync(opts)
 	}
@@ -188,8 +192,10 @@ func encryptSync(opts EncryptOptions) error {
 
 	index := archiveIndex{ChunkSize: chunkSize}
 	seen := make(map[string]struct{})
+	encryptedFiles := 0
 
 	for _, root := range roots {
+		progressf(opts.ProgressWriter, "encrypt: scanning root %q", root)
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -237,6 +243,8 @@ func encryptSync(opts EncryptOptions) error {
 				return nil
 			}
 
+			progressf(opts.ProgressWriter, "encrypt: processing %s", relPath)
+
 			payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
 			if err != nil {
 				return err
@@ -262,6 +270,7 @@ func encryptSync(opts EncryptOptions) error {
 			entry.ChunkCount = chunkCount
 			entry.NonceSeed = nonceSeed
 			index.Entries = append(index.Entries, entry)
+			encryptedFiles++
 			return nil
 		})
 		if err != nil {
@@ -313,6 +322,8 @@ func encryptSync(opts EncryptOptions) error {
 			}
 		}
 	}
+
+	progressf(opts.ProgressWriter, "encrypt: done (%d files)", encryptedFiles)
 
 	return nil
 }
@@ -396,8 +407,12 @@ func encryptAppend(opts EncryptOptions) error {
 		return fmt.Errorf("get working directory: %w", err)
 	}
 	seen := make(map[string]struct{})
+	addedFiles := 0
+	replacedFiles := 0
+	ignoredFiles := 0
 
 	for _, root := range roots {
+		progressf(opts.ProgressWriter, "encrypt append: scanning root %q", root)
 		err := filepath.WalkDir(root, func(pathFs string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -444,6 +459,7 @@ func encryptAppend(opts EncryptOptions) error {
 			}
 
 			targetPath := relPath
+			replaced := false
 			if _, exists := entryPos[targetPath]; exists {
 				action, err := opts.OnFileConflict(targetPath)
 				if err != nil {
@@ -451,16 +467,22 @@ func encryptAppend(opts EncryptOptions) error {
 				}
 				switch action {
 				case ConflictIgnore:
+					ignoredFiles++
+					progressf(opts.ProgressWriter, "encrypt append: ignore existing %s", targetPath)
 					return nil
 				case ConflictOverwrite:
 					// Keep target path.
+					replaced = true
+					progressf(opts.ProgressWriter, "encrypt append: overwrite %s", targetPath)
 				case ConflictChange:
 					targetPath = nextArchiveChangedPath(targetPath, entryPos)
-					fmt.Fprintf(os.Stderr, "conflict change: %q -> %q\n", relPath, targetPath)
+					progressf(opts.ProgressWriter, "encrypt append: conflict change %q -> %q", relPath, targetPath)
 				default:
 					return fmt.Errorf("unknown conflict action for %q", targetPath)
 				}
 			}
+
+			progressf(opts.ProgressWriter, "encrypt append: processing %s", targetPath)
 
 			payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
 			if err != nil {
@@ -493,9 +515,13 @@ func encryptAppend(opts EncryptOptions) error {
 
 			if pos, exists := entryPos[targetPath]; exists {
 				entries[pos] = entry
+				if replaced {
+					replacedFiles++
+				}
 			} else {
 				entryPos[targetPath] = len(entries)
 				entries = append(entries, entry)
+				addedFiles++
 			}
 
 			return nil
@@ -549,6 +575,8 @@ func encryptAppend(opts EncryptOptions) error {
 			}
 		}
 	}
+
+	progressf(opts.ProgressWriter, "encrypt append: done (added=%d replaced=%d ignored=%d)", addedFiles, replacedFiles, ignoredFiles)
 
 	return nil
 }
@@ -626,6 +654,8 @@ func Decrypt(opts DecryptOptions) error {
 		return errors.New("container file is required")
 	}
 
+	progressf(opts.ProgressWriter, "decrypt: container=%q", opts.ContainerPath)
+
 	in, err := os.Open(opts.ContainerPath)
 	if err != nil {
 		return fmt.Errorf("open container: %w", err)
@@ -675,6 +705,9 @@ func Decrypt(opts DecryptOptions) error {
 		return errors.New("invalid chunk size in index")
 	}
 
+	decryptedFiles := 0
+	skippedFiles := 0
+
 	for _, entry := range index.Entries {
 		target, err := safeOutputPath(entry.Path)
 		if err != nil {
@@ -691,11 +724,15 @@ func Decrypt(opts DecryptOptions) error {
 				return err
 			}
 			if skip {
+				skippedFiles++
+				progressf(opts.ProgressWriter, "decrypt: ignore existing %s", target)
 				continue
 			}
+			progressf(opts.ProgressWriter, "decrypt: restoring %s", resolvedTarget)
 			if err := decryptFileEntry(in, aead, index.ChunkSize, resolvedTarget, entry); err != nil {
 				return err
 			}
+			decryptedFiles++
 		default:
 			return fmt.Errorf("unknown entry type %d for %q", entry.Type, entry.Path)
 		}
@@ -711,6 +748,8 @@ func Decrypt(opts DecryptOptions) error {
 			return fmt.Errorf("remove container file: %w", err)
 		}
 	}
+
+	progressf(opts.ProgressWriter, "decrypt: done (restored=%d skipped=%d)", decryptedFiles, skippedFiles)
 
 	return nil
 }
@@ -1051,6 +1090,14 @@ func isAuthFailure(err error) bool {
 	}
 	return strings.Contains(err.Error(), "message authentication failed")
 }
+
+func progressf(w io.Writer, format string, args ...any) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintf(w, format+"\n", args...)
+}
+
 func preparePayload(sourcePath string) (payloadPath string, originalSize int64, storedSize int64, compressed bool, cleanup func(), err error) {
 	cleanup = func() {}
 	info, err := os.Stat(sourcePath)

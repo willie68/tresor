@@ -3,6 +3,8 @@ Simple file tresor for en/decrypting different folders into one file.
 
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
+Current release: `v0.3.0`
+
 ## Commands
 
 Encrypt:
@@ -53,6 +55,11 @@ tresor list --password <mein-passwort> --file e:\temp\meintresor.tre
 
 This prints a `dir`-like listing with full output paths.
 
+## Resolved Issues In v0.3.0
+
+- #1: Added progress output for encrypt and decrypt.
+- #2: Added summary output to `list` (files, dirs, total bytes).
+
 Current state: recursive encryption/decryption is implemented for regular files and directories.
 
 ## Container Format (v1)
@@ -102,13 +109,13 @@ This project uses GoReleaser and a GitHub Actions workflow.
 
 - Configuration: `.goreleaser.yaml`
 - Workflow: `.github/workflows/release.yml`
-- Trigger: push a tag like `v0.1.0`
+- Trigger: push a tag like `v0.3.0`
 
 Create and push a release tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Optional local dry run:

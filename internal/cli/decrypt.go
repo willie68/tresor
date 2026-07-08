@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"tresor/internal/tresor"
@@ -39,6 +40,7 @@ func newDecryptCmd() *cobra.Command {
 				ContainerPath:   opts.file,
 				RemoveContainer: opts.remove,
 				OnFileConflict:  handler,
+				ProgressWriter:  os.Stderr,
 			})
 			if err != nil {
 				return err

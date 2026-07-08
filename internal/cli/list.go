@@ -34,13 +34,23 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
+			fileCount := 0
+			dirCount := 0
+			var totalBytes int64
+
 			for _, entry := range entries {
 				if entry.IsDir {
+					dirCount++
 					fmt.Printf("<DIR>          %s\n", entry.Path)
 					continue
 				}
+				fileCount++
+				totalBytes += entry.Size
 				fmt.Printf("%14d %s\n", entry.Size, entry.Path)
 			}
+
+			fmt.Printf("%14d File(s) %d bytes\n", fileCount, totalBytes)
+			fmt.Printf("%14d Dir(s)\n", dirCount)
 			return nil
 		},
 	}
