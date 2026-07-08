@@ -1,9 +1,7 @@
 # tresor
-Simple file tresor for en/decrypting different folders into one file.
-
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.5.0`
+Current release: `v0.6.0`
 
 ## Commands
 
