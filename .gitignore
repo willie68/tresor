@@ -27,3 +27,5 @@ vendor/
 .idea/
 .DS_Store
 Thumbs.db
+
+manual_test/
