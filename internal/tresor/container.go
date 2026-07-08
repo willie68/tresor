@@ -75,7 +75,7 @@ type FileConflictAction int
 const (
 	ConflictIgnore FileConflictAction = iota + 1
 	ConflictOverwrite
-	ConflictChange
+	ConflictRename
 )
 
 type FileConflictHandler func(targetPath string) (FileConflictAction, error)
@@ -474,9 +474,9 @@ func encryptAppend(opts EncryptOptions) error {
 					// Keep target path.
 					replaced = true
 					progressf(opts.ProgressWriter, "encrypt append: overwrite %s", targetPath)
-				case ConflictChange:
-					targetPath = nextArchiveChangedPath(targetPath, entryPos)
-					progressf(opts.ProgressWriter, "encrypt append: conflict change %q -> %q", relPath, targetPath)
+				case ConflictRename:
+					targetPath = nextArchiveRenamedPath(targetPath, entryPos)
+					progressf(opts.ProgressWriter, "encrypt append: conflict rename %q -> %q", relPath, targetPath)
 				default:
 					return fmt.Errorf("unknown conflict action for %q", targetPath)
 				}
@@ -629,7 +629,7 @@ func readContainerIndex(containerPath, password string) (containerHeader, archiv
 	return hdr, index, footer, nil
 }
 
-func nextArchiveChangedPath(targetPath string, existing map[string]int) string {
+func nextArchiveRenamedPath(targetPath string, existing map[string]int) string {
 	dir := path.Dir(targetPath)
 	base := path.Base(targetPath)
 	ext := path.Ext(base)
@@ -863,12 +863,12 @@ func resolveFileConflictTarget(target string, handler FileConflictHandler) (reso
 			return "", false, fmt.Errorf("cannot overwrite directory with file: %q", target)
 		}
 		return target, false, nil
-	case ConflictChange:
-		resolvedTarget, skip, err := nextAvailableChangedName(target)
+	case ConflictRename:
+		resolvedTarget, skip, err := nextAvailableRenamedName(target)
 		if err != nil {
 			return "", false, err
 		}
-		fmt.Fprintf(os.Stderr, "conflict change: %q -> %q\n", target, resolvedTarget)
+		fmt.Fprintf(os.Stderr, "conflict rename: %q -> %q\n", target, resolvedTarget)
 		return resolvedTarget, skip, nil
 	default:
 		return "", false, fmt.Errorf("unknown conflict action for %q", target)
@@ -882,7 +882,7 @@ func promptFileConflict(target string) (FileConflictAction, error) {
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Fprintf(os.Stderr, "file %q already exists. [i]gnore/[o]verwrite/[c]hange: ", target)
+		fmt.Fprintf(os.Stderr, "file %q already exists. [i]gnore/[o]verwrite/[r]ename: ", target)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return 0, fmt.Errorf("read conflict choice: %w", err)
@@ -892,15 +892,15 @@ func promptFileConflict(target string) (FileConflictAction, error) {
 			return ConflictIgnore, nil
 		case "o", "overwrite":
 			return ConflictOverwrite, nil
-		case "c", "change":
-			return ConflictChange, nil
+		case "r", "rename", "c", "change":
+			return ConflictRename, nil
 		default:
-			fmt.Fprintln(os.Stderr, "please enter i, o, or c")
+			fmt.Fprintln(os.Stderr, "please enter i, o, or r")
 		}
 	}
 }
 
-func nextAvailableChangedName(target string) (string, bool, error) {
+func nextAvailableRenamedName(target string) (string, bool, error) {
 	dir := filepath.Dir(target)
 	base := filepath.Base(target)
 	ext := filepath.Ext(base)

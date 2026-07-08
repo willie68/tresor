@@ -57,7 +57,7 @@ func newDecryptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
 	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove container file after successful decryption")
 	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre)")
-	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|change")
+	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|rename")
 
 	_ = cmd.MarkFlagRequired("file")
 
@@ -76,12 +76,12 @@ func conflictHandlerFromFlag(mode string) (tresor.FileConflictHandler, error) {
 		return func(targetPath string) (tresor.FileConflictAction, error) {
 			return tresor.ConflictOverwrite, nil
 		}, nil
-	case "change":
+	case "rename", "change":
 		return func(targetPath string) (tresor.FileConflictAction, error) {
-			return tresor.ConflictChange, nil
+			return tresor.ConflictRename, nil
 		}, nil
 	default:
-		return nil, fmt.Errorf("invalid --on-conflict value %q (use: prompt|ignore|overwrite|change)", mode)
+		return nil, fmt.Errorf("invalid --on-conflict value %q (use: prompt|ignore|overwrite|rename)", mode)
 	}
 }
 

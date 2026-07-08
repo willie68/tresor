@@ -3,7 +3,7 @@ Simple file tresor for en/decrypting different folders into one file.
 
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.3.0`
+Current release: `v0.4.0`
 
 ## Commands
 
@@ -28,7 +28,7 @@ For append conflicts, use `--on-conflict` (also for non-interactive runs):
 ```bash
 tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict ignore mongodump\
 tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict overwrite mongodump\
-tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict change mongodump\
+tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict rename mongodump\
 ```
 
 Decrypt:
@@ -42,7 +42,7 @@ If files already exist during decrypt, use `--on-conflict` to define behavior:
 ```bash
 tresor decrypt --file e:\temp\meintresor.tre --on-conflict ignore
 tresor decrypt --file e:\temp\meintresor.tre --on-conflict overwrite
-tresor decrypt --file e:\temp\meintresor.tre --on-conflict change
+tresor decrypt --file e:\temp\meintresor.tre --on-conflict rename
 ```
 
 Default is `--on-conflict prompt`.
@@ -55,7 +55,15 @@ tresor list --password <mein-passwort> --file e:\temp\meintresor.tre
 
 This prints a `dir`-like listing with full output paths.
 
-## Resolved Issues In v0.3.0
+Version:
+
+```bash
+tresor version
+```
+
+Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.4.0
 
 - #1: Added progress output for encrypt and decrypt.
 - #2: Added summary output to `list` (files, dirs, total bytes).
@@ -109,13 +117,13 @@ This project uses GoReleaser and a GitHub Actions workflow.
 
 - Configuration: `.goreleaser.yaml`
 - Workflow: `.github/workflows/release.yml`
-- Trigger: push a tag like `v0.3.0`
+- Trigger: push a tag like `v0.4.0`
 
 Create and push a release tag:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 Optional local dry run:

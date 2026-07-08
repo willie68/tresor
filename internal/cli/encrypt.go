@@ -60,7 +60,7 @@ func newEncryptCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove source files/directories after successful encryption")
 	cmd.Flags().StringVar(&opts.file, "file", "", "Target container file path (.tre)")
 	cmd.Flags().StringVar(&opts.ifExists, "if-exists", "sync", "Behavior if target container exists: sync|append")
-	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior in append mode: prompt|ignore|overwrite|change")
+	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior in append mode: prompt|ignore|overwrite|rename")
 
 	_ = cmd.MarkFlagRequired("file")
 

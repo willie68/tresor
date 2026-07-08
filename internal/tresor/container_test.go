@@ -297,12 +297,12 @@ func TestDecryptConflictOverwrite(t *testing.T) {
 	})
 }
 
-func TestDecryptConflictChange(t *testing.T) {
+func TestDecryptConflictRename(t *testing.T) {
 	tempDir := t.TempDir()
 	withWorkingDir(t, tempDir, func() {
 		mustWriteFile(t, filepath.Join("src", "file.txt"), []byte("from-container"))
 		err := Encrypt(EncryptOptions{
-			Password:      "pw-change",
+			Password:      "pw-rename",
 			ContainerPath: "vault.tre",
 			Inputs:        []string{"src"},
 		})
@@ -313,10 +313,10 @@ func TestDecryptConflictChange(t *testing.T) {
 		mustWriteFile(t, filepath.Join("src", "file.txt"), []byte("already-there"))
 
 		err = Decrypt(DecryptOptions{
-			Password:      "pw-change",
+			Password:      "pw-rename",
 			ContainerPath: "vault.tre",
 			OnFileConflict: func(targetPath string) (FileConflictAction, error) {
-				return ConflictChange, nil
+				return ConflictRename, nil
 			},
 		})
 		if err != nil {
