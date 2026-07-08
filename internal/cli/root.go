@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -18,4 +19,12 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// ensureTreeExtension adds .tre extension if no extension is present
+func ensureTreeExtension(filePath string) string {
+	if filepath.Ext(filePath) == "" {
+		return filePath + ".tre"
+	}
+	return filePath
 }

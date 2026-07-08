@@ -35,9 +35,10 @@ func newDecryptCmd() *cobra.Command {
 				return err
 			}
 
+			containerPath := ensureTreeExtension(opts.file)
 			err = tresor.Decrypt(tresor.DecryptOptions{
 				Password:        password,
-				ContainerPath:   opts.file,
+				ContainerPath:   containerPath,
 				RemoveContainer: opts.remove,
 				OnFileConflict:  handler,
 				ProgressWriter:  os.Stderr,
@@ -46,7 +47,7 @@ func newDecryptCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("decrypted container %q into current working directory\n", opts.file)
+			fmt.Printf("decrypted container %q into current working directory\n", containerPath)
 			if opts.remove {
 				fmt.Println("container file was removed after successful decryption")
 			}

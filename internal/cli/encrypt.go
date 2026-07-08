@@ -35,9 +35,10 @@ func newEncryptCmd() *cobra.Command {
 				return err
 			}
 
+			containerPath := ensureTreeExtension(opts.file)
 			err = tresor.Encrypt(tresor.EncryptOptions{
 				Password:       password,
-				ContainerPath:  opts.file,
+				ContainerPath:  containerPath,
 				Inputs:         args,
 				RemoveSources:  opts.remove,
 				IfExists:       opts.ifExists,
@@ -48,7 +49,7 @@ func newEncryptCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("encrypted %d input path(s) into %q\n", len(args), opts.file)
+			fmt.Printf("encrypted %d input path(s) into %q\n", len(args), containerPath)
 			if opts.remove {
 				fmt.Println("source paths were removed after successful encryption")
 			}

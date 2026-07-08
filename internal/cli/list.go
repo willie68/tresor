@@ -26,9 +26,10 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
+			containerPath := ensureTreeExtension(opts.file)
 			entries, err := tresor.List(tresor.ListOptions{
 				Password:      password,
-				ContainerPath: opts.file,
+				ContainerPath: containerPath,
 			})
 			if err != nil {
 				return err
