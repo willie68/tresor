@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -106,6 +107,7 @@ type archiveEntry struct {
 	Mode       uint32  `json:"mode"`
 	Type       uint8   `json:"type"`
 	Size       int64   `json:"size"`
+	ModTime    int64   `json:"mod_time,omitempty"`
 	StoredSize int64   `json:"stored_size,omitempty"`
 	Compressed bool    `json:"compressed,omitempty"`
 	DataOffset uint64  `json:"data_offset,omitempty"`
@@ -229,8 +231,9 @@ func encryptSync(opts EncryptOptions) error {
 			}
 
 			entry := archiveEntry{
-				Path: relPath,
-				Mode: uint32(info.Mode().Perm()),
+				Path:    relPath,
+				Mode:    uint32(info.Mode().Perm()),
+				ModTime: info.ModTime().Unix(),
 			}
 
 			if d.IsDir() {
@@ -505,6 +508,7 @@ func encryptAppend(opts EncryptOptions) error {
 				Mode:       uint32(info.Mode().Perm()),
 				Type:       entryTypeFile,
 				Size:       originalSize,
+				ModTime:    info.ModTime().Unix(),
 				StoredSize: storedSize,
 				Compressed: compressed,
 				DataOffset: uint64(offset),
@@ -1079,6 +1083,13 @@ func decryptFileEntry(in *os.File, aead cipher.AEAD, chunkSizeFromIndex uint32, 
 		}
 	} else if restoredStored != entry.Size {
 		return fmt.Errorf("restored size mismatch for %q: got %d want %d", target, restoredStored, entry.Size)
+	}
+
+	if entry.ModTime != 0 {
+		modTime := time.Unix(entry.ModTime, 0)
+		if err := os.Chtimes(target, modTime, modTime); err != nil {
+			return fmt.Errorf("restore mod time for %q: %w", target, err)
+		}
 	}
 
 	return nil

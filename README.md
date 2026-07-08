@@ -3,7 +3,7 @@ Simple file tresor for en/decrypting different folders into one file.
 
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.4.0`
+Current release: `v0.5.0`
 
 ## Commands
 
@@ -62,6 +62,10 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.5.0
+
+- #3: Added ModTime (modification time) preservation in encrypt/decrypt round trip. **Non-backward-compatible**: old containers lack ModTime data.
 
 ## Resolved Issues In v0.4.0
 
