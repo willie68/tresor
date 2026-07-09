@@ -5,11 +5,15 @@ Current release: `v0.7.1`
 
 ## Commands
 
-Encrypt:
+### Password Handling
+
+The `--password` flag is optional. If omitted, you will be prompted to enter the password interactively. Use `--password` only for automated scenarios (scripts, CI/CD pipelines).
+
+### Encrypt
 
 ```bash
-tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
-tresor encrypt --password <mein-passwort> --file e:\temp\meintresor.tre mongodump\ minio\
+tresor encrypt --remove mongodump\ minio\
+tresor encrypt --file e:\temp\meintresor.tre mongodump\ minio\
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -32,11 +36,17 @@ tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict ov
 tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict rename mongodump\
 ```
 
-Decrypt:
+For automated scenarios with password:
 
 ```bash
-tresor decrypt --password <mein-passwort> --remove
-tresor decrypt --password <mein-passwort> --file e:\temp\meintresor.tre
+tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
+```
+
+### Decrypt
+
+```bash
+tresor decrypt --remove
+tresor decrypt --file e:\temp\meintresor.tre
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -51,11 +61,11 @@ tresor decrypt --file e:\temp\meintresor.tre --on-conflict rename
 
 Default is `--on-conflict prompt`.
 
-List:
+### List
 
 ```bash
-tresor list --password <mein-passwort>
-tresor list --password <mein-passwort> --file e:\temp\meintresor.tre
+tresor list
+tresor list --file e:\temp\meintresor.tre
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -70,7 +80,7 @@ Output example:
 
 Modification times are shown in `YYYY-MM-DD HH:MM:SS` format.
 
-Extract:
+### Extract
 
 ```bash
 tresor extract input/bilder/text.txt                              # Extract single file
@@ -87,7 +97,7 @@ Extract behavior:
 
 If files already exist during extract, use `--on-conflict` to define behavior (same options as decrypt).
 
-Version:
+### Version
 
 ```bash
 tresor version
@@ -95,9 +105,14 @@ tresor version
 
 Shows version, a short about text, and a license hint.
 
-## Resolved Issues In v0.6.1
+## Resolved Issues In v0.7.1
 
 - Single source of truth for version number: Release version is injected via ldflags from git tag during build.
+- Modification times displayed in list command in `YYYY-MM-DD HH:MM:SS` format.
+- New `extract` command for selective extraction of individual files or subdirectories.
+- Optional `--file` flag across all commands (defaults to `tresor.tre`).
+- Early validation of container file and command flags before password prompt.
+- Interactive password input as default (--password flag only for automation).
 - #3: Modified `list` command now displays modification times in `YYYY-MM-DD HH:MM:SS` format.
 - Made `--file` flag optional for `encrypt`, `decrypt`, and `list` commands; defaults to `tresor.tre` in the current directory.
 - Argument validation (file existence, flag values) now occurs before password prompt.
