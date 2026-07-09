@@ -20,6 +20,7 @@ func newVersionCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("tresor %s\n", appVersion)
 			fmt.Println("Password-based CLI for encrypting and decrypting directory trees into .tre containers.")
+			fmt.Println("https://github.com/willie68/tresor")
 			fmt.Println("License: MIT (see LICENSE)")
 		},
 	}
