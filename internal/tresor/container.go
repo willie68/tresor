@@ -107,6 +107,8 @@ type containerFooter struct {
 	IndexNonce  [12]byte
 }
 
+const footerSize int64 = 4 + 8 + 8 + 12
+
 type archiveIndex struct {
 	ChunkSize uint32         `json:"chunk_size"`
 	Entries   []archiveEntry `json:"entries"`
@@ -208,116 +210,14 @@ func encryptSync(opts EncryptOptions) error {
 
 	for _, root := range roots {
 		progressf(opts.ProgressWriter, "encrypt: scanning root %q", root)
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-
-			absPath, err := filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-
-			if _, ok := seen[absPath]; ok {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			seen[absPath] = struct{}{}
-
-			relPath, err := filepath.Rel(cwd, absPath)
-			if err != nil {
-				return err
-			}
-			if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
-				return fmt.Errorf("path %q is outside working directory", path)
-			}
-			relPath = filepath.ToSlash(relPath)
-
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			entry := archiveEntry{
-				Path:    relPath,
-				Mode:    uint32(info.Mode().Perm()),
-				ModTime: info.ModTime().Unix(),
-			}
-
-			if d.IsDir() {
-				entry.Type = entryTypeDir
-				index.Entries = append(index.Entries, entry)
-				return nil
-			}
-
-			if !d.Type().IsRegular() {
-				return nil
-			}
-
-			progressf(opts.ProgressWriter, "encrypt: processing %s", relPath)
-
-			payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-
-			offset, err := out.Seek(0, io.SeekCurrent)
-			if err != nil {
-				return err
-			}
-
-			dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
-			if err != nil {
-				return err
-			}
-
-			entry.Type = entryTypeFile
-			entry.Size = originalSize
-			entry.StoredSize = storedSize
-			entry.Compressed = compressed
-			entry.DataOffset = uint64(offset)
-			entry.DataLength = dataLen
-			entry.ChunkCount = chunkCount
-			entry.NonceSeed = nonceSeed
-			index.Entries = append(index.Entries, entry)
-			encryptedFiles++
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("walk path %q: %w", root, err)
+		walkErr := encryptSyncWalkDir(root, cwd, out, aead, &index, seen, opts.ProgressWriter, &encryptedFiles)
+		if walkErr != nil {
+			return walkErr
 		}
 	}
 
-	indexBytes, err := json.Marshal(index)
-	if err != nil {
-		return fmt.Errorf("marshal index: %w", err)
-	}
-
-	var indexNonce [12]byte
-	if _, err := rand.Read(indexNonce[:]); err != nil {
-		return fmt.Errorf("generate index nonce: %w", err)
-	}
-
-	indexCipher := aead.Seal(nil, indexNonce[:], indexBytes, nil)
-	indexOffset, err := out.Seek(0, io.SeekCurrent)
-	if err != nil {
+	if err := writeContainerIndex(out, aead, index); err != nil {
 		return err
-	}
-	if _, err := out.Write(indexCipher); err != nil {
-		return fmt.Errorf("write index ciphertext: %w", err)
-	}
-
-	footer := containerFooter{
-		Magic:       footerMagic,
-		IndexOffset: uint64(indexOffset),
-		IndexLength: uint64(len(indexCipher)),
-		IndexNonce:  indexNonce,
-	}
-	if err := writeFooter(out, footer); err != nil {
-		return fmt.Errorf("write footer: %w", err)
 	}
 
 	if err := out.Close(); err != nil {
@@ -338,6 +238,91 @@ func encryptSync(opts EncryptOptions) error {
 
 	progressf(opts.ProgressWriter, "encrypt: done (%d files)", encryptedFiles)
 
+	return nil
+}
+
+func encryptSyncWalkDir(root, cwd string, out *os.File, aead cipher.AEAD, index *archiveIndex, seen map[string]struct{}, pw io.Writer, fileCount *int) error {
+	return filepath.WalkDir(root, func(pathFs string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return encryptSyncProcessEntry(pathFs, d, cwd, out, aead, index, seen, pw, fileCount)
+	})
+}
+
+func encryptSyncProcessEntry(pathFs string, d fs.DirEntry, cwd string, out *os.File, aead cipher.AEAD, index *archiveIndex, seen map[string]struct{}, pw io.Writer, fileCount *int) error {
+	absPath, err := filepath.Abs(pathFs)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := seen[absPath]; ok {
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	seen[absPath] = struct{}{}
+
+	relPath, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		return fmt.Errorf("path %q is outside working directory", pathFs)
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	info, err := d.Info()
+	if err != nil {
+		return err
+	}
+
+	if d.IsDir() {
+		index.Entries = append(index.Entries, archiveEntry{Path: relPath, Mode: uint32(info.Mode().Perm()), Type: entryTypeDir, ModTime: info.ModTime().Unix()})
+		return nil
+	}
+
+	if !d.Type().IsRegular() {
+		return nil
+	}
+
+	return encryptSyncProcessFile(absPath, relPath, info, out, aead, index, pw, fileCount)
+}
+
+func encryptSyncProcessFile(absPath, relPath string, info fs.FileInfo, out *os.File, aead cipher.AEAD, index *archiveIndex, pw io.Writer, fileCount *int) error {
+	progressf(pw, "encrypt: processing %s", relPath)
+
+	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	offset, err := out.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+
+	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
+	if err != nil {
+		return err
+	}
+
+	index.Entries = append(index.Entries, archiveEntry{
+		Path:       relPath,
+		Mode:       uint32(info.Mode().Perm()),
+		Type:       entryTypeFile,
+		Size:       originalSize,
+		ModTime:    info.ModTime().Unix(),
+		StoredSize: storedSize,
+		Compressed: compressed,
+		DataOffset: uint64(offset),
+		DataLength: dataLen,
+		ChunkCount: chunkCount,
+		NonceSeed:  nonceSeed,
+	})
+	*fileCount++
 	return nil
 }
 
@@ -382,27 +367,9 @@ func encryptAppend(opts EncryptOptions) error {
 		return fmt.Errorf("write header: %w", err)
 	}
 
-	in, err := os.Open(opts.ContainerPath)
-	if err != nil {
-		return fmt.Errorf("open existing container: %w", err)
+	if err := copyExistingPayload(opts.ContainerPath, out, footer); err != nil {
+		return err
 	}
-	inOpen := true
-	defer func() {
-		if inOpen {
-			_ = in.Close()
-		}
-	}()
-
-	if _, err := in.Seek(headerSize, io.SeekStart); err != nil {
-		return fmt.Errorf("seek existing payload: %w", err)
-	}
-	if _, err := io.CopyN(out, in, int64(footer.IndexOffset)-headerSize); err != nil {
-		return fmt.Errorf("copy existing payload: %w", err)
-	}
-	if err := in.Close(); err != nil {
-		return fmt.Errorf("close existing container: %w", err)
-	}
-	inOpen = false
 
 	entries := make([]archiveEntry, len(index.Entries))
 	copy(entries, index.Entries)
@@ -419,160 +386,25 @@ func encryptAppend(opts EncryptOptions) error {
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
-	seen := make(map[string]struct{})
-	addedFiles := 0
-	replacedFiles := 0
-	ignoredFiles := 0
 
+	stats := struct {
+		added    int
+		replaced int
+		ignored  int
+	}{}
+
+	seen := make(map[string]struct{})
 	for _, root := range roots {
 		progressf(opts.ProgressWriter, "encrypt append: scanning root %q", root)
-		err := filepath.WalkDir(root, func(pathFs string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-
-			absPath, err := filepath.Abs(pathFs)
-			if err != nil {
-				return err
-			}
-
-			if _, ok := seen[absPath]; ok {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			seen[absPath] = struct{}{}
-
-			relPath, err := filepath.Rel(cwd, absPath)
-			if err != nil {
-				return err
-			}
-			if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
-				return fmt.Errorf("path %q is outside working directory", pathFs)
-			}
-			relPath = filepath.ToSlash(relPath)
-
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			if d.IsDir() {
-				if _, exists := entryPos[relPath]; !exists {
-					entry := archiveEntry{Path: relPath, Mode: uint32(info.Mode().Perm()), Type: entryTypeDir}
-					entryPos[relPath] = len(entries)
-					entries = append(entries, entry)
-				}
-				return nil
-			}
-
-			if !d.Type().IsRegular() {
-				return nil
-			}
-
-			targetPath := relPath
-			replaced := false
-			if _, exists := entryPos[targetPath]; exists {
-				action, err := opts.OnFileConflict(targetPath)
-				if err != nil {
-					return err
-				}
-				switch action {
-				case ConflictIgnore:
-					ignoredFiles++
-					progressf(opts.ProgressWriter, "encrypt append: ignore existing %s", targetPath)
-					return nil
-				case ConflictOverwrite:
-					// Keep target path.
-					replaced = true
-					progressf(opts.ProgressWriter, "encrypt append: overwrite %s", targetPath)
-				case ConflictRename:
-					targetPath = nextArchiveRenamedPath(targetPath, entryPos)
-					progressf(opts.ProgressWriter, "encrypt append: conflict rename %q -> %q", relPath, targetPath)
-				default:
-					return fmt.Errorf("unknown conflict action for %q", targetPath)
-				}
-			}
-
-			progressf(opts.ProgressWriter, "encrypt append: processing %s", targetPath)
-
-			payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-
-			offset, err := out.Seek(0, io.SeekCurrent)
-			if err != nil {
-				return err
-			}
-
-			dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
-			if err != nil {
-				return err
-			}
-
-			entry := archiveEntry{
-				Path:       targetPath,
-				Mode:       uint32(info.Mode().Perm()),
-				Type:       entryTypeFile,
-				Size:       originalSize,
-				ModTime:    info.ModTime().Unix(),
-				StoredSize: storedSize,
-				Compressed: compressed,
-				DataOffset: uint64(offset),
-				DataLength: dataLen,
-				ChunkCount: chunkCount,
-				NonceSeed:  nonceSeed,
-			}
-
-			if pos, exists := entryPos[targetPath]; exists {
-				entries[pos] = entry
-				if replaced {
-					replacedFiles++
-				}
-			} else {
-				entryPos[targetPath] = len(entries)
-				entries = append(entries, entry)
-				addedFiles++
-			}
-
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("walk path %q: %w", root, err)
+		walkErr := encryptAppendWalkDir(root, cwd, out, aead, &entries, entryPos, opts.OnFileConflict, opts.ProgressWriter, seen, &stats)
+		if walkErr != nil {
+			return walkErr
 		}
 	}
 
 	finalIndex := archiveIndex{ChunkSize: chunkSize, Entries: entries}
-	indexBytes, err := json.Marshal(finalIndex)
-	if err != nil {
-		return fmt.Errorf("marshal index: %w", err)
-	}
-
-	var indexNonce [12]byte
-	if _, err := rand.Read(indexNonce[:]); err != nil {
-		return fmt.Errorf("generate index nonce: %w", err)
-	}
-
-	indexCipher := aead.Seal(nil, indexNonce[:], indexBytes, nil)
-	indexOffset, err := out.Seek(0, io.SeekCurrent)
-	if err != nil {
+	if err := writeContainerIndex(out, aead, finalIndex); err != nil {
 		return err
-	}
-	if _, err := out.Write(indexCipher); err != nil {
-		return fmt.Errorf("write index ciphertext: %w", err)
-	}
-
-	newFooter := containerFooter{
-		Magic:       footerMagic,
-		IndexOffset: uint64(indexOffset),
-		IndexLength: uint64(len(indexCipher)),
-		IndexNonce:  indexNonce,
-	}
-	if err := writeFooter(out, newFooter); err != nil {
-		return fmt.Errorf("write footer: %w", err)
 	}
 
 	if err := out.Close(); err != nil {
@@ -590,7 +422,159 @@ func encryptAppend(opts EncryptOptions) error {
 		}
 	}
 
-	progressf(opts.ProgressWriter, "encrypt append: done (added=%d replaced=%d ignored=%d)", addedFiles, replacedFiles, ignoredFiles)
+	progressf(opts.ProgressWriter, "encrypt append: done (added=%d replaced=%d ignored=%d)", stats.added, stats.replaced, stats.ignored)
+
+	return nil
+}
+
+func copyExistingPayload(containerPath string, out *os.File, footer containerFooter) error {
+	in, err := os.Open(containerPath)
+	if err != nil {
+		return fmt.Errorf("open existing container: %w", err)
+	}
+	defer func() {
+		_ = in.Close()
+	}()
+
+	if _, err := in.Seek(headerSize, io.SeekStart); err != nil {
+		return fmt.Errorf("seek existing payload: %w", err)
+	}
+	if _, err := io.CopyN(out, in, int64(footer.IndexOffset)-headerSize); err != nil {
+		return fmt.Errorf("copy existing payload: %w", err)
+	}
+	return nil
+}
+
+func encryptAppendWalkDir(root, cwd string, out *os.File, aead cipher.AEAD, entries *[]archiveEntry, entryPos map[string]int, conflictHandler FileConflictHandler, pw io.Writer, seen map[string]struct{}, stats *struct {
+	added    int
+	replaced int
+	ignored  int
+}) error {
+	return filepath.WalkDir(root, func(pathFs string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return encryptAppendProcessEntry(pathFs, d, cwd, out, aead, entries, entryPos, conflictHandler, pw, seen, stats)
+	})
+}
+
+func encryptAppendProcessEntry(pathFs string, d fs.DirEntry, cwd string, out *os.File, aead cipher.AEAD, entries *[]archiveEntry, entryPos map[string]int, conflictHandler FileConflictHandler, pw io.Writer, seen map[string]struct{}, stats *struct {
+	added    int
+	replaced int
+	ignored  int
+}) error {
+	absPath, err := filepath.Abs(pathFs)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := seen[absPath]; ok {
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	seen[absPath] = struct{}{}
+
+	relPath, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		return fmt.Errorf("path %q is outside working directory", pathFs)
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	info, err := d.Info()
+	if err != nil {
+		return err
+	}
+
+	if d.IsDir() {
+		if _, exists := entryPos[relPath]; !exists {
+			entryPos[relPath] = len(*entries)
+			*entries = append(*entries, archiveEntry{Path: relPath, Mode: uint32(info.Mode().Perm()), Type: entryTypeDir})
+		}
+		return nil
+	}
+
+	if !d.Type().IsRegular() {
+		return nil
+	}
+
+	return encryptAppendProcessFile(absPath, relPath, info, out, aead, entries, entryPos, conflictHandler, pw, stats)
+}
+
+func encryptAppendProcessFile(absPath, relPath string, info fs.FileInfo, out *os.File, aead cipher.AEAD, entries *[]archiveEntry, entryPos map[string]int, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
+	added    int
+	replaced int
+	ignored  int
+}) error {
+	targetPath := relPath
+	replaced := false
+	if _, exists := entryPos[targetPath]; exists {
+		action, err := conflictHandler(targetPath)
+		if err != nil {
+			return err
+		}
+		switch action {
+		case ConflictIgnore:
+			stats.ignored++
+			progressf(pw, "encrypt append: ignore existing %s", targetPath)
+			return nil
+		case ConflictOverwrite:
+			replaced = true
+			progressf(pw, "encrypt append: overwrite %s", targetPath)
+		case ConflictRename:
+			targetPath = nextArchiveRenamedPath(targetPath, entryPos)
+			progressf(pw, "encrypt append: conflict rename %q -> %q", relPath, targetPath)
+		default:
+			return fmt.Errorf("unknown conflict action for %q", targetPath)
+		}
+	}
+
+	progressf(pw, "encrypt append: processing %s", targetPath)
+
+	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	offset, err := out.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+
+	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
+	if err != nil {
+		return err
+	}
+
+	entry := archiveEntry{
+		Path:       targetPath,
+		Mode:       uint32(info.Mode().Perm()),
+		Type:       entryTypeFile,
+		Size:       originalSize,
+		ModTime:    info.ModTime().Unix(),
+		StoredSize: storedSize,
+		Compressed: compressed,
+		DataOffset: uint64(offset),
+		DataLength: dataLen,
+		ChunkCount: chunkCount,
+		NonceSeed:  nonceSeed,
+	}
+
+	if pos, exists := entryPos[targetPath]; exists {
+		(*entries)[pos] = entry
+		if replaced {
+			stats.replaced++
+		}
+	} else {
+		entryPos[targetPath] = len(*entries)
+		*entries = append(*entries, entry)
+		stats.added++
+	}
 
 	return nil
 }
@@ -641,6 +625,39 @@ func readContainerIndex(containerPath, password string) (containerHeader, archiv
 	}
 
 	return hdr, index, footer, nil
+}
+
+func writeContainerIndex(out *os.File, aead cipher.AEAD, index archiveIndex) error {
+	indexBytes, err := json.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("marshal index: %w", err)
+	}
+
+	var indexNonce [12]byte
+	if _, err := rand.Read(indexNonce[:]); err != nil {
+		return fmt.Errorf("generate index nonce: %w", err)
+	}
+
+	indexCipher := aead.Seal(nil, indexNonce[:], indexBytes, nil)
+	indexOffset, err := out.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	if _, err := out.Write(indexCipher); err != nil {
+		return fmt.Errorf("write index ciphertext: %w", err)
+	}
+
+	footer := containerFooter{
+		Magic:       footerMagic,
+		IndexOffset: uint64(indexOffset),
+		IndexLength: uint64(len(indexCipher)),
+		IndexNonce:  indexNonce,
+	}
+	if err := writeFooter(out, footer); err != nil {
+		return fmt.Errorf("write footer: %w", err)
+	}
+
+	return nil
 }
 
 func nextArchiveRenamedPath(targetPath string, existing map[string]int) string {
@@ -719,36 +736,19 @@ func Decrypt(opts DecryptOptions) error {
 		return errors.New("invalid chunk size in index")
 	}
 
-	decryptedFiles := 0
-	skippedFiles := 0
+	if opts.OnFileConflict == nil {
+		opts.OnFileConflict = promptFileConflict
+	}
+
+	stats := struct {
+		decrypted int
+		skipped   int
+	}{}
 
 	for _, entry := range index.Entries {
-		target, err := safeOutputPath(entry.Path)
+		err := decryptProcessEntry(in, aead, index.ChunkSize, entry, opts.OnFileConflict, opts.ProgressWriter, &stats)
 		if err != nil {
 			return err
-		}
-		switch entry.Type {
-		case entryTypeDir:
-			if err := os.MkdirAll(target, fs.FileMode(entry.Mode)); err != nil {
-				return fmt.Errorf("create directory %q: %w", target, err)
-			}
-		case entryTypeFile:
-			resolvedTarget, skip, err := resolveFileConflictTarget(target, opts.OnFileConflict)
-			if err != nil {
-				return err
-			}
-			if skip {
-				skippedFiles++
-				progressf(opts.ProgressWriter, "decrypt: ignore existing %s", target)
-				continue
-			}
-			progressf(opts.ProgressWriter, "decrypt: restoring %s", resolvedTarget)
-			if err := decryptFileEntry(in, aead, index.ChunkSize, resolvedTarget, entry); err != nil {
-				return err
-			}
-			decryptedFiles++
-		default:
-			return fmt.Errorf("unknown entry type %d for %q", entry.Type, entry.Path)
 		}
 	}
 
@@ -763,8 +763,42 @@ func Decrypt(opts DecryptOptions) error {
 		}
 	}
 
-	progressf(opts.ProgressWriter, "decrypt: done (restored=%d skipped=%d)", decryptedFiles, skippedFiles)
+	progressf(opts.ProgressWriter, "decrypt: done (restored=%d skipped=%d)", stats.decrypted, stats.skipped)
 
+	return nil
+}
+
+func decryptProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
+	decrypted int
+	skipped   int
+}) error {
+	target, err := safeOutputPath(entry.Path)
+	if err != nil {
+		return err
+	}
+	switch entry.Type {
+	case entryTypeDir:
+		if err := os.MkdirAll(target, fs.FileMode(entry.Mode)); err != nil {
+			return fmt.Errorf("create directory %q: %w", target, err)
+		}
+	case entryTypeFile:
+		resolvedTarget, skip, err := resolveFileConflictTarget(target, conflictHandler)
+		if err != nil {
+			return err
+		}
+		if skip {
+			stats.skipped++
+			progressf(pw, "decrypt: ignore existing %s", target)
+			return nil
+		}
+		progressf(pw, "decrypt: restoring %s", resolvedTarget)
+		if err := decryptFileEntry(in, aead, chunkSize, resolvedTarget, entry); err != nil {
+			return err
+		}
+		stats.decrypted++
+	default:
+		return fmt.Errorf("unknown entry type %d for %q", entry.Type, entry.Path)
+	}
 	return nil
 }
 
@@ -799,6 +833,7 @@ func List(opts ListOptions) ([]ListedEntry, error) {
 	return entries, nil
 }
 
+// Extract extracts files and directories from the container to the specified extract path.
 func Extract(opts ExtractOptions) error {
 	if opts.Password == "" {
 		return errors.New("password is required")
@@ -882,80 +917,19 @@ func Extract(opts ExtractOptions) error {
 		opts.OnFileConflict = promptFileConflict
 	}
 
-	extractedFiles := 0
-	skippedFiles := 0
+	// Check if we're extracting a single file
+	isSingleFile := len(matchingEntries) == 1 && matchingEntries[0].Type == entryTypeFile && matchingEntries[0].Path == extractPath
 
-	// Check if we're extracting a single file or a directory
-	isSingleFile := false
-	for _, entry := range matchingEntries {
-		if entry.Type == entryTypeFile && entry.Path == extractPath {
-			isSingleFile = true
-			break
-		}
-	}
+	stats := struct {
+		extracted int
+		skipped   int
+	}{}
 
 	for _, entry := range matchingEntries {
-		// Skip directories for now (will be created as needed)
-		if entry.Type == entryTypeDir {
-			if opts.ForceDirs {
-				target, err := safeOutputPath(entry.Path)
-				if err != nil {
-					return err
-				}
-				if err := os.MkdirAll(target, fs.FileMode(entry.Mode)); err != nil {
-					return fmt.Errorf("create directory %q: %w", target, err)
-				}
-			}
-			continue
-		}
-
-		var targetPath string
-		if opts.ForceDirs {
-			// Keep full path structure
-			var err error
-			targetPath, err = safeOutputPath(entry.Path)
-			if err != nil {
-				return err
-			}
-		} else {
-			// Extract only the filename (or relative path from extract point)
-			if isSingleFile {
-				// For single file, use just the filename
-				targetPath = path.Base(entry.Path)
-			} else {
-				// For directory, strip the extract path prefix and keep relative path
-				relPath := strings.TrimPrefix(entry.Path, extractPath+"/")
-				var err error
-				targetPath, err = safeOutputPath(relPath)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		// Ensure parent directory exists
-		targetDir := filepath.Dir(targetPath)
-		if targetDir != "." {
-			if err := os.MkdirAll(targetDir, 0755); err != nil {
-				return fmt.Errorf("create parent directory for %q: %w", targetPath, err)
-			}
-		}
-
-		resolvedTarget, skip, err := resolveFileConflictTarget(targetPath, opts.OnFileConflict)
+		err := extractProcessEntry(in, aead, index.ChunkSize, entry, extractPath, isSingleFile, opts.ForceDirs, opts.OnFileConflict, opts.ProgressWriter, &stats)
 		if err != nil {
 			return err
 		}
-		if skip {
-			skippedFiles++
-			progressf(opts.ProgressWriter, "extract: ignore existing %s", targetPath)
-			continue
-		}
-
-		progressf(opts.ProgressWriter, "extract: extracting %s", resolvedTarget)
-		if err := decryptFileEntry(in, aead, index.ChunkSize, resolvedTarget, entry); err != nil {
-			return err
-		}
-		extractedFiles++
 	}
 
 	if err := in.Close(); err != nil {
@@ -963,8 +937,75 @@ func Extract(opts ExtractOptions) error {
 	}
 	containerOpen = false
 
-	progressf(opts.ProgressWriter, "extract: done (extracted=%d skipped=%d)", extractedFiles, skippedFiles)
+	progressf(opts.ProgressWriter, "extract: done (extracted=%d skipped=%d)", stats.extracted, stats.skipped)
 
+	return nil
+}
+
+func extractProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, extractPath string, isSingleFile, forceDirs bool, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
+	extracted int
+	skipped   int
+}) error {
+	// Skip directories for now (will be created as needed)
+	if entry.Type == entryTypeDir {
+		if forceDirs {
+			target, err := safeOutputPath(entry.Path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(target, fs.FileMode(entry.Mode)); err != nil {
+				return fmt.Errorf("create directory %q: %w", target, err)
+			}
+		}
+		return nil
+	}
+
+	var targetPath string
+	var err error
+	if forceDirs {
+		// Keep full path structure
+		targetPath, err = safeOutputPath(entry.Path)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Extract only the filename (or relative path from extract point)
+		if isSingleFile {
+			// For single file, use just the filename
+			targetPath = path.Base(entry.Path)
+		} else {
+			// For directory, strip the extract path prefix and keep relative path
+			relPath := strings.TrimPrefix(entry.Path, extractPath+"/")
+			targetPath, err = safeOutputPath(relPath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Ensure parent directory exists
+	targetDir := filepath.Dir(targetPath)
+	if targetDir != "." {
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("create parent directory for %q: %w", targetPath, err)
+		}
+	}
+
+	resolvedTarget, skip, err := resolveFileConflictTarget(targetPath, conflictHandler)
+	if err != nil {
+		return err
+	}
+	if skip {
+		stats.skipped++
+		progressf(pw, "extract: ignore existing %s", targetPath)
+		return nil
+	}
+
+	progressf(pw, "extract: extracting %s", resolvedTarget)
+	if err := decryptFileEntry(in, aead, chunkSize, resolvedTarget, entry); err != nil {
+		return err
+	}
+	stats.extracted++
 	return nil
 }
 
@@ -1281,7 +1322,10 @@ func progressf(w io.Writer, format string, args ...any) {
 }
 
 func preparePayload(sourcePath string) (payloadPath string, originalSize int64, storedSize int64, compressed bool, cleanup func(), err error) {
-	cleanup = func() {}
+	// Default cleanup function does nothing; will be replaced if a temp file is created.
+	cleanup = func() {
+		// no-op
+	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return "", 0, 0, false, cleanup, fmt.Errorf("stat %q: %w", sourcePath, err)
@@ -1310,33 +1354,33 @@ func preparePayload(sourcePath string) (payloadPath string, originalSize int64, 
 	zw, err := gzip.NewWriterLevel(tmp, gzip.BestSpeed)
 	if err != nil {
 		cleanup()
-		return "", 0, 0, false, func() {}, fmt.Errorf("create gzip writer: %w", err)
+		return "", 0, 0, false, cleanup, fmt.Errorf("create gzip writer: %w", err)
 	}
 
 	if _, err := io.Copy(zw, in); err != nil {
 		_ = zw.Close()
 		cleanup()
-		return "", 0, 0, false, func() {}, fmt.Errorf("compress %q: %w", sourcePath, err)
+		return "", 0, 0, false, cleanup, fmt.Errorf("compress %q: %w", sourcePath, err)
 	}
 	if err := zw.Close(); err != nil {
 		cleanup()
-		return "", 0, 0, false, func() {}, fmt.Errorf("finalize compression for %q: %w", sourcePath, err)
+		return "", 0, 0, false, cleanup, fmt.Errorf("finalize compression for %q: %w", sourcePath, err)
 	}
 
 	compressedInfo, err := tmp.Stat()
 	if err != nil {
 		cleanup()
-		return "", 0, 0, false, func() {}, fmt.Errorf("stat compressed data for %q: %w", sourcePath, err)
+		return "", 0, 0, false, cleanup, fmt.Errorf("stat compressed data for %q: %w", sourcePath, err)
 	}
 
 	if compressedInfo.Size() >= originalSize {
 		cleanup()
-		return sourcePath, originalSize, originalSize, false, func() {}, nil
+		return sourcePath, originalSize, originalSize, false, cleanup, nil
 	}
 
 	if err := tmp.Close(); err != nil {
 		cleanup()
-		return "", 0, 0, false, func() {}, fmt.Errorf("close compressed temp for %q: %w", sourcePath, err)
+		return "", 0, 0, false, cleanup, fmt.Errorf("close compressed temp for %q: %w", sourcePath, err)
 	}
 
 	cleanup = func() {
@@ -1437,7 +1481,6 @@ func writeFooter(w io.Writer, f containerFooter) error {
 }
 
 func readFooter(in *os.File) (containerFooter, error) {
-	footerSize := int64(4 + 8 + 8 + 12)
 	stat, err := in.Stat()
 	if err != nil {
 		return containerFooter{}, fmt.Errorf("stat container: %w", err)

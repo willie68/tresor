@@ -72,8 +72,6 @@ func newListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre); defaults to tresor.tre")
 
 	return cmd
-
-	return cmd
 }
 
 func init() {
