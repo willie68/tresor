@@ -476,10 +476,7 @@ func TestListReturnsFullPaths(t *testing.T) {
 			t.Fatal("expected at least one list entry")
 		}
 
-		wantFile, err := filepath.Abs(filepath.Join("src", "nested", "file.txt"))
-		if err != nil {
-			t.Fatalf("resolve expected abs file path: %v", err)
-		}
+		wantFile := "src/nested/file.txt"
 
 		found := false
 		for _, entry := range entries {

@@ -25,9 +25,15 @@ func newDecryptCmd() *cobra.Command {
 		Short: "Recursively decrypt a container file into directories in the working directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			password, err := resolveDecryptPassword(opts.password)
-			if err != nil {
-				return err
+			// Use default tresor.tre if no file specified
+			if opts.file == "" {
+				opts.file = "tresor.tre"
+			}
+
+			// Validate arguments and flags first, before prompting for password
+			containerPath := ensureTreeExtension(opts.file)
+			if _, err := os.Stat(containerPath); err != nil {
+				return fmt.Errorf("container file %q: %w", containerPath, err)
 			}
 
 			handler, err := conflictHandlerFromFlag(opts.conflict)
@@ -35,7 +41,12 @@ func newDecryptCmd() *cobra.Command {
 				return err
 			}
 
-			containerPath := ensureTreeExtension(opts.file)
+			// Now ask for password
+			password, err := resolveDecryptPassword(opts.password)
+			if err != nil {
+				return err
+			}
+
 			err = tresor.Decrypt(tresor.DecryptOptions{
 				Password:        password,
 				ContainerPath:   containerPath,
@@ -57,10 +68,8 @@ func newDecryptCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
 	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove container file after successful decryption")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre)")
+	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|rename")
-
-	_ = cmd.MarkFlagRequired("file")
 
 	return cmd
 }

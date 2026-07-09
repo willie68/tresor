@@ -25,12 +25,19 @@ func newEncryptCmd() *cobra.Command {
 		Short: "Recursively encrypt one or more directories into a container file",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			password, err := resolveEncryptPassword(opts.password)
+			// Use default tresor.tre if no file specified
+			if opts.file == "" {
+				opts.file = "tresor.tre"
+			}
+
+			// Validate arguments and flags first, before prompting for password
+			handler, err := conflictHandlerFromFlag(opts.conflict)
 			if err != nil {
 				return err
 			}
 
-			handler, err := conflictHandlerFromFlag(opts.conflict)
+			// Now ask for password
+			password, err := resolveEncryptPassword(opts.password)
 			if err != nil {
 				return err
 			}
@@ -59,11 +66,9 @@ func newEncryptCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for encryption")
 	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove source files/directories after successful encryption")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Target container file path (.tre)")
+	cmd.Flags().StringVar(&opts.file, "file", "", "Target container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().StringVar(&opts.ifExists, "if-exists", "sync", "Behavior if target container exists: sync|append")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior in append mode: prompt|ignore|overwrite|rename")
-
-	_ = cmd.MarkFlagRequired("file")
 
 	return cmd
 }

@@ -66,9 +66,19 @@ type ListOptions struct {
 }
 
 type ListedEntry struct {
-	Path  string
-	IsDir bool
-	Size  int64
+	Path    string
+	IsDir   bool
+	Size    int64
+	ModTime int64
+}
+
+type ExtractOptions struct {
+	Password       string
+	ContainerPath  string
+	ExtractPath    string
+	ForceDirs      bool
+	OnFileConflict FileConflictHandler
+	ProgressWriter io.Writer
 }
 
 type FileConflictAction int
@@ -773,19 +783,11 @@ func List(opts ListOptions) ([]ListedEntry, error) {
 
 	entries := make([]ListedEntry, 0, len(index.Entries))
 	for _, entry := range index.Entries {
-		cleanPath, err := safeOutputPath(entry.Path)
-		if err != nil {
-			return nil, err
-		}
-		absPath, err := filepath.Abs(cleanPath)
-		if err != nil {
-			return nil, fmt.Errorf("resolve absolute path for %q: %w", entry.Path, err)
-		}
-
 		listed := ListedEntry{
-			Path:  absPath,
-			IsDir: entry.Type == entryTypeDir,
-			Size:  entry.Size,
+			Path:    entry.Path,
+			IsDir:   entry.Type == entryTypeDir,
+			Size:    entry.Size,
+			ModTime: entry.ModTime,
 		}
 		entries = append(entries, listed)
 	}
@@ -795,6 +797,175 @@ func List(opts ListOptions) ([]ListedEntry, error) {
 	})
 
 	return entries, nil
+}
+
+func Extract(opts ExtractOptions) error {
+	if opts.Password == "" {
+		return errors.New("password is required")
+	}
+	if opts.ContainerPath == "" {
+		return errors.New("container file is required")
+	}
+	if opts.ExtractPath == "" {
+		return errors.New("extract path is required")
+	}
+
+	progressf(opts.ProgressWriter, "extract: container=%q path=%q force-dirs=%v", opts.ContainerPath, opts.ExtractPath, opts.ForceDirs)
+
+	in, err := os.Open(opts.ContainerPath)
+	if err != nil {
+		return fmt.Errorf("open container: %w", err)
+	}
+	containerOpen := true
+	defer func() {
+		if containerOpen {
+			_ = in.Close()
+		}
+	}()
+
+	hdr, err := readHeader(in)
+	if err != nil {
+		return err
+	}
+	aead, err := buildAEAD(opts.Password, hdr)
+	if err != nil {
+		return err
+	}
+
+	footer, err := readFooter(in)
+	if err != nil {
+		return err
+	}
+
+	if _, err := in.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
+		return fmt.Errorf("seek index: %w", err)
+	}
+	indexCipher := make([]byte, footer.IndexLength)
+	if _, err := io.ReadFull(in, indexCipher); err != nil {
+		return fmt.Errorf("read index ciphertext: %w", err)
+	}
+
+	indexPlain, err := aead.Open(nil, footer.IndexNonce[:], indexCipher, nil)
+	if err != nil {
+		if isAuthFailure(err) {
+			return errors.New("invalid password or corrupted container")
+		}
+		return fmt.Errorf("decrypt index: %w", err)
+	}
+
+	var index archiveIndex
+	if err := json.Unmarshal(indexPlain, &index); err != nil {
+		return fmt.Errorf("unmarshal index: %w", err)
+	}
+	if index.ChunkSize == 0 {
+		return errors.New("invalid chunk size in index")
+	}
+
+	// Normalize extract path (convert to forward slashes)
+	extractPath := path.Clean(filepath.ToSlash(opts.ExtractPath))
+
+	// Find matching entries
+	matchingEntries := make([]archiveEntry, 0)
+	for _, entry := range index.Entries {
+		entryPath := entry.Path
+		// Check if entry matches extract path or is within the extract path
+		if entryPath == extractPath || strings.HasPrefix(entryPath, extractPath+"/") {
+			matchingEntries = append(matchingEntries, entry)
+		}
+	}
+
+	if len(matchingEntries) == 0 {
+		return fmt.Errorf("no entries found for path %q", opts.ExtractPath)
+	}
+
+	if opts.OnFileConflict == nil {
+		opts.OnFileConflict = promptFileConflict
+	}
+
+	extractedFiles := 0
+	skippedFiles := 0
+
+	// Check if we're extracting a single file or a directory
+	isSingleFile := false
+	for _, entry := range matchingEntries {
+		if entry.Type == entryTypeFile && entry.Path == extractPath {
+			isSingleFile = true
+			break
+		}
+	}
+
+	for _, entry := range matchingEntries {
+		// Skip directories for now (will be created as needed)
+		if entry.Type == entryTypeDir {
+			if opts.ForceDirs {
+				target, err := safeOutputPath(entry.Path)
+				if err != nil {
+					return err
+				}
+				if err := os.MkdirAll(target, fs.FileMode(entry.Mode)); err != nil {
+					return fmt.Errorf("create directory %q: %w", target, err)
+				}
+			}
+			continue
+		}
+
+		var targetPath string
+		if opts.ForceDirs {
+			// Keep full path structure
+			var err error
+			targetPath, err = safeOutputPath(entry.Path)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Extract only the filename (or relative path from extract point)
+			if isSingleFile {
+				// For single file, use just the filename
+				targetPath = path.Base(entry.Path)
+			} else {
+				// For directory, strip the extract path prefix and keep relative path
+				relPath := strings.TrimPrefix(entry.Path, extractPath+"/")
+				var err error
+				targetPath, err = safeOutputPath(relPath)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// Ensure parent directory exists
+		targetDir := filepath.Dir(targetPath)
+		if targetDir != "." {
+			if err := os.MkdirAll(targetDir, 0755); err != nil {
+				return fmt.Errorf("create parent directory for %q: %w", targetPath, err)
+			}
+		}
+
+		resolvedTarget, skip, err := resolveFileConflictTarget(targetPath, opts.OnFileConflict)
+		if err != nil {
+			return err
+		}
+		if skip {
+			skippedFiles++
+			progressf(opts.ProgressWriter, "extract: ignore existing %s", targetPath)
+			continue
+		}
+
+		progressf(opts.ProgressWriter, "extract: extracting %s", resolvedTarget)
+		if err := decryptFileEntry(in, aead, index.ChunkSize, resolvedTarget, entry); err != nil {
+			return err
+		}
+		extractedFiles++
+	}
+
+	if err := in.Close(); err != nil {
+		return fmt.Errorf("close container file: %w", err)
+	}
+	containerOpen = false
+
+	progressf(opts.ProgressWriter, "extract: done (extracted=%d skipped=%d)", extractedFiles, skippedFiles)
+
+	return nil
 }
 
 func normalizeInputRoots(inputs []string) ([]string, error) {

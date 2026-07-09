@@ -1,15 +1,18 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.6.0`
+Current release: `v0.7.0`
 
 ## Commands
 
 Encrypt:
 
 ```bash
-tresor encrypt --password <mein-passwort> --remove --file e:\temp\meintresor.tre mongodump\ minio\
+tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
+tresor encrypt --password <mein-passwort> --file e:\temp\meintresor.tre mongodump\ minio\
 ```
+
+If `--file` is omitted, `tresor.tre` in the current directory is used.
 
 If the target container already exists, use `--if-exists`:
 
@@ -32,8 +35,11 @@ tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict re
 Decrypt:
 
 ```bash
-tresor decrypt --password <mein-passwort> --remove --file e:\temp\meintresor.tre
+tresor decrypt --password <mein-passwort> --remove
+tresor decrypt --password <mein-passwort> --file e:\temp\meintresor.tre
 ```
+
+If `--file` is omitted, `tresor.tre` in the current directory is used.
 
 If files already exist during decrypt, use `--on-conflict` to define behavior:
 
@@ -48,10 +54,38 @@ Default is `--on-conflict prompt`.
 List:
 
 ```bash
+tresor list --password <mein-passwort>
 tresor list --password <mein-passwort> --file e:\temp\meintresor.tre
 ```
 
-This prints a `dir`-like listing with full output paths.
+If `--file` is omitted, `tresor.tre` in the current directory is used.
+
+Output example:
+```
+2026-07-08 10:02:44 <DIR>          /path/to/directory
+2020-01-15 14:30:00             42 /path/to/file.txt
+             2 File(s) 42 bytes
+             1 Dir(s)
+```
+
+Modification times are shown in `YYYY-MM-DD HH:MM:SS` format.
+
+Extract:
+
+```bash
+tresor extract input/bilder/text.txt                              # Extract single file
+tresor extract input/bilder                                       # Extract directory (flat)
+tresor extract input/bilder --force-dirs                          # Extract directory (preserve structure)
+tresor extract input/bilder --file e:\temp\meintresor.tre         # Extract from specific container
+```
+
+If `--file` is omitted, `tresor.tre` in the current directory is used.
+
+Extract behavior:
+- Without `--force-dirs`: Files are extracted without their directory structure (only filename or relative path from extract point)
+- With `--force-dirs`: Full directory structure is preserved
+
+If files already exist during extract, use `--on-conflict` to define behavior (same options as decrypt).
 
 Version:
 
@@ -60,6 +94,14 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.6.1
+
+- Single source of truth for version number: Release version is injected via ldflags from git tag during build.
+- #3: Modified `list` command now displays modification times in `YYYY-MM-DD HH:MM:SS` format.
+- Made `--file` flag optional for `encrypt`, `decrypt`, and `list` commands; defaults to `tresor.tre` in the current directory.
+- Argument validation (file existence, flag values) now occurs before password prompt.
+- New `extract` command: Extract individual files or subdirectories from container with optional `--force-dirs` for preserving directory structure.
 
 ## Resolved Issues In v0.5.0
 
@@ -119,13 +161,17 @@ This project uses GoReleaser and a GitHub Actions workflow.
 
 - Configuration: `.goreleaser.yaml`
 - Workflow: `.github/workflows/release.yml`
-- Trigger: push a tag like `v0.4.0`
+- Trigger: push a tag like `v0.6.1`
+
+**Version Management:**
+
+The version number is a single source of truth defined in the `VERSION` file. During release builds, GoReleaser injects this version into the binary via ldflags (`-X main.Version={{.Version}}`), which is read from the git tag.
 
 Create and push a release tag:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 Optional local dry run:
@@ -133,3 +179,5 @@ Optional local dry run:
 ```bash
 goreleaser release --snapshot --clean
 ```
+
+Dev builds show version `dev` by default.
