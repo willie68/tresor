@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.7.0`
+Current release: `v0.7.1`
 
 ## Commands
 
