@@ -1,13 +1,9 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.7.1`
+Current release: `v0.7.2`
 
 ## Commands
-
-### Password Handling
-
-The `--password` flag is optional. If omitted, you will be prompted to enter the password interactively. Use `--password` only for automated scenarios (scripts, CI/CD pipelines).
 
 ### Encrypt
 
@@ -96,6 +92,10 @@ Extract behavior:
 - With `--force-dirs`: Full directory structure is preserved
 
 If files already exist during extract, use `--on-conflict` to define behavior (same options as decrypt).
+
+### Password Handling
+
+The `--password` flag is optional. If omitted, you will be prompted to enter the password interactively. Use `--password` only for automated scenarios (scripts, CI/CD pipelines).
 
 ### Version
 
