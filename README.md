@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.7.3`
+Current release: `v0.7.4`
 
 ## Commands
 
@@ -66,7 +66,9 @@ tresor list --file e:\temp\meintresor.tre
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
 
-Output example (PowerShell-style format):
+The output format is platform-specific for native familiarity:
+
+**Windows:**
 ```
 Mode                 LastWriteTime         Length Name
 ----                 -------------         ------ ----
@@ -78,10 +80,25 @@ d-----        09.07.2026     10:19                output
              2 Dir(s)
 ```
 
-- `Mode`: File mode (`d-----` for directories, `-a----` for files)
-- `LastWriteTime`: Modification date/time in `DD.MM.YYYY HH:MM` format
-- `Length`: File size in bytes (blank for directories)
-- `Name`: Full path within the container
+**Linux/Unix:**
+```
+drwxr-xr-x 1 user group                  Oct 10 09:39 input
+drwxr-xr-x 1 user group                  Oct 09 10:19 output
+-rw-r--r-- 1 user group        4644      Oct 10 09:45 manual_test.go
+-rw-r--r-- 1 user group           5      Oct 10 09:45 neu.txt
+total 4
+```
+
+**macOS (Darwin):**
+```
+drwxr-xr-x 1 user group                  Oct 10 09:39 input
+drwxr-xr-x 1 user group                  Oct 09 10:19 output
+-rw-r--r-- 1 user group        4644      Oct 10 09:45 manual_test.go
+-rw-r--r-- 1 user group           5      Oct 10 09:45 neu.txt
+total 4
+```
+
+Output automatically adapts to the operating system for familiar formatting.
 
 ### Extract
 
@@ -111,6 +128,10 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.7.4
+
+- Platform-specific `list` command output format: Windows displays PowerShell-style dir format, Linux/Unix shows `ls -l` style, macOS (Darwin) shows native `ls -l` format for consistent user experience on each platform.
 
 ## Resolved Issues In v0.7.3
 
