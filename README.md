@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.7.2`
+Current release: `v0.7.3`
 
 ## Commands
 
@@ -66,15 +66,22 @@ tresor list --file e:\temp\meintresor.tre
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
 
-Output example:
+Output example (PowerShell-style format):
 ```
-2026-07-08 10:02:44 <DIR>          /path/to/directory
-2020-01-15 14:30:00             42 /path/to/file.txt
-             2 File(s) 42 bytes
-             1 Dir(s)
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----        10.07.2026     09:39                input
+d-----        09.07.2026     10:19                output
+-a----        10.07.2026     09:45           4644 manual_test.go
+-a----        10.07.2026     09:45              5 neu.txt
+             2 File(s) 8935936 bytes
+             2 Dir(s)
 ```
 
-Modification times are shown in `YYYY-MM-DD HH:MM:SS` format.
+- `Mode`: File mode (`d-----` for directories, `-a----` for files)
+- `LastWriteTime`: Modification date/time in `DD.MM.YYYY HH:MM` format
+- `Length`: File size in bytes (blank for directories)
+- `Name`: Full path within the container
 
 ### Extract
 
@@ -104,6 +111,15 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.7.3
+
+- Improved `list` command output format: Now displays in PowerShell-style table format with Mode, LastWriteTime, Length, and Name columns for better readability and familiarity to Windows users.
+
+## Resolved Issues In v0.7.2
+
+- Security documentation added: Comprehensive brute-force resistance analysis with test results showing Argon2id KDF effectiveness.
+- Brute-force test (`TestBruteForceResistance`): Demonstrates that 15 weak passwords all fail, confirming KDF protection (~100-500ms per attempt).
 
 ## Resolved Issues In v0.7.1
 

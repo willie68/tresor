@@ -45,21 +45,33 @@ func newListCmd() *cobra.Command {
 			dirCount := 0
 			var totalBytes int64
 
+			// Print header
+			fmt.Printf("%-6s %20s %10s %-s\n", "Mode", "LastWriteTime", "Length", "Name")
+			fmt.Printf("%-6s %20s %10s %-s\n", "----", "-------------", "------", "----")
+
 			for _, entry := range entries {
+				mode := "-a----"
+				if entry.IsDir {
+					mode = "d-----"
+					dirCount++
+				} else {
+					fileCount++
+					totalBytes += entry.Size
+				}
+
 				var modTime string
 				if entry.ModTime != 0 {
-					modTime = time.Unix(entry.ModTime, 0).Format("2006-01-02 15:04:05")
+					modTime = time.Unix(entry.ModTime, 0).Format("02.01.2006     15:04")
 				} else {
-					modTime = "                   "
+					modTime = "                  "
 				}
-				if entry.IsDir {
-					dirCount++
-					fmt.Printf("%s <DIR>          %s\n", modTime, entry.Path)
-					continue
+
+				length := ""
+				if !entry.IsDir {
+					length = fmt.Sprintf("%d", entry.Size)
 				}
-				fileCount++
-				totalBytes += entry.Size
-				fmt.Printf("%s %14d %s\n", modTime, entry.Size, entry.Path)
+
+				fmt.Printf("%-6s %20s %10s %s\n", mode, modTime, length, entry.Path)
 			}
 
 			fmt.Printf("%14d File(s) %d bytes\n", fileCount, totalBytes)
