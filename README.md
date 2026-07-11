@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.8.0`
+Current release: `v0.8.1`
 
 ## Commands
 
@@ -117,6 +117,40 @@ Extract behavior:
 
 If files already exist during extract, use `--on-conflict` to define behavior (same options as decrypt).
 
+### Mount
+
+```bash
+tresor mount x:
+tresor mount y: --file e:\temp\meintresor.tre
+tresor mount /mnt/tresor
+```
+
+Mount a tresor container as a read-only filesystem using FUSE (Filesystem in Userspace).
+
+Supported platforms:
+- **Windows**: Uses WinFSP for FUSE support (via cgofuse)
+- **Linux/macOS**: Uses native FUSE support
+
+Features:
+- Read-only access to all files and directories in the container
+- Transparent decompression of compressed files
+- Full file path and metadata support
+- Real-time access without extracting (files remain in encrypted container)
+
+Example:
+```bash
+# Mount container to drive x:
+tresor mount x:
+
+# Navigate and read files
+dir x:\\                    # List container contents
+type x:\\input\\file.txt    # Read a specific file
+
+# Unmount by pressing Ctrl+C
+```
+
+If `--file` is omitted, `tresor.tre` in the current directory is used.
+
 ### Password Handling
 
 The `--password` flag is optional. If omitted, you will be prompted to enter the password interactively. Use `--password` only for automated scenarios (scripts, CI/CD pipelines).
@@ -128,6 +162,17 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.8.1
+
+- New `mount` command: Mount tresor container as read-only FUSE filesystem for transparent file access
+- Fixed mount output buffering: Messages now display immediately (not deferred)
+- Fixed Ctrl+C exit handling: Single press now properly unmounts and exits
+- Implemented proper FUSE Read() callback: Full file decryption and serving via filesystem
+- Compressed file support: Added gzip decompression for transparent access to compressed files
+- Fixed small file read corruption: Binary garbage now properly decrypts and decompresses
+- Fixed file truncation: Read() now correctly handles decompressed vs. stored file sizes
+- Thread-safety improvements: Mutex protection for concurrent FUSE reads
 
 ## Resolved Issues In v0.7.4
 
