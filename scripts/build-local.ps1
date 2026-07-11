@@ -17,6 +17,6 @@ if (-not (Test-Path $OutputDir)) {
 
 $target = Join-Path $OutputDir $BinaryName
 Write-Host "==> Building $target"
-go build -o $target ./cmd/tresor
+go build -tags nocgo -o $target ./cmd/tresor
 
 Write-Host "Build complete: $target"

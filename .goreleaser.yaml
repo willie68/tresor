@@ -14,13 +14,11 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -X main.Version={{.Version}}
+      - -tags nocgo
     goos:
-      - linux
       - windows
-      - darwin
     goarch:
       - amd64
-      - arm64
 
 archives:
   - id: default
