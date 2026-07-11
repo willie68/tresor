@@ -93,10 +93,16 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 
 	fs.chunkSize = fs.index.ChunkSize
 
-	// Calculate total size and volume label
+	// Calculate total size and volume label AND Validate file sizes for all entries
 	var totalSize uint64
 	for _, entry := range fs.index.Entries {
 		if entry.Type == entryTypeFile { // Regular file
+			if entry.Size <= 0 && entry.StoredSize <= 0 {
+				return nil, fmt.Errorf("entry %q has no valid size", entry.Path)
+			}
+			if entry.ChunkCount == 0 && entry.Size > 0 {
+				return nil, fmt.Errorf("entry %q has size but no chunks", entry.Path)
+			}
 			if entry.Compressed && entry.Size > 0 {
 				totalSize += uint64(entry.Size)
 			} else if entry.StoredSize > 0 {
@@ -125,19 +131,6 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 	fs.containerFile, err = os.Open(containerPath)
 	if err != nil {
 		return nil, fmt.Errorf("open container for reading: %w", err)
-	}
-
-	// Validate file sizes for all entries
-	for i := range fs.index.Entries {
-		entry := &fs.index.Entries[i]
-		if entry.Type == entryTypeFile { // Regular file
-			if entry.Size <= 0 && entry.StoredSize <= 0 {
-				return nil, fmt.Errorf("entry %q has no valid size", entry.Path)
-			}
-			if entry.ChunkCount == 0 && entry.Size > 0 {
-				return nil, fmt.Errorf("entry %q has size but no chunks", entry.Path)
-			}
-		}
 	}
 
 	return fs, nil
@@ -289,9 +282,7 @@ func (fs *ReadOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Sta
 
 		// Extract just the name
 		relPath := strings.TrimPrefix(child.Path, path)
-		if path != "" {
-			relPath = strings.TrimPrefix(relPath, "/")
-		}
+		relPath = strings.TrimPrefix(relPath, "/")
 		name := strings.Split(relPath, "/")[0]
 
 		if !fill(name, &stat, 0) {
@@ -426,10 +417,10 @@ func normalizePath(path string) string {
 }
 
 func (fs *ReadOnlyFS) findEntry(path string) *archiveEntry {
-	for i := range fs.index.Entries {
-		entryPath := strings.TrimPrefix(fs.index.Entries[i].Path, "/")
+	for _, entry := range fs.index.Entries {
+		entryPath := strings.TrimPrefix(entry.Path, "/")
 		if entryPath == path {
-			return &fs.index.Entries[i]
+			return &entry
 		}
 	}
 	return nil
@@ -524,12 +515,6 @@ func (fs *ReadOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 		maxSize = entry.StoredSize
 	}
 
-	// Data size in container (what we read from container)
-	dataSize := entry.StoredSize
-	if dataSize == 0 {
-		dataSize = entry.Size
-	}
-
 	if offset >= maxSize {
 		return []byte{}, nil
 	}
@@ -539,65 +524,75 @@ func (fs *ReadOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 		length = maxSize - offset
 	}
 
-	// Read and decrypt ALL chunks sequentially (like decryptFileEntry does)
-	// Then extract only the requested bytes
-	// Use mutex for entire read operation to keep container file position consistent
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+	// Data size in container (what we read from container before potential decompression)
+	storedSize := entry.StoredSize
+	if storedSize == 0 {
+		storedSize = entry.Size
+	}
+	if storedSize < 0 {
+		return nil, errors.New("invalid stored size")
+	}
 
 	encChunkSize := int(fs.chunkSize) + aeadTagSize
 	cipherChunk := make([]byte, encChunkSize)
-	var allData []byte
+	var cipherChunks [][]byte
 
-	// Seek to start of file data
-	if _, err := fs.containerFile.Seek(int64(entry.DataOffset), io.SeekStart); err != nil {
+	// Read all encrypted chunks with lock (minimize lock duration)
+	fs.mu.Lock()
+	_, err := fs.containerFile.Seek(int64(entry.DataOffset), io.SeekStart)
+	if err != nil {
+		fs.mu.Unlock()
 		return nil, fmt.Errorf("seek data: %w", err)
 	}
 
 	for i := uint32(0); i < entry.ChunkCount; i++ {
-		n, err := io.ReadFull(fs.containerFile, cipherChunk)
-		if err != nil && err != io.ErrUnexpectedEOF {
-			return nil, fmt.Errorf("read chunk %d: %w", i, err)
+		_, readErr := io.ReadFull(fs.containerFile, cipherChunk)
+		if readErr != nil {
+			fs.mu.Unlock()
+			return nil, fmt.Errorf("read encrypted chunk %d: %w", i, readErr)
 		}
-		if n < int(encChunkSize) && err == io.ErrUnexpectedEOF {
-			return nil, fmt.Errorf("chunk %d truncated: read %d, expected %d", i, n, encChunkSize)
-		}
+		// Copy chunk to avoid issues with reusing buffer
+		chunk := make([]byte, len(cipherChunk))
+		copy(chunk, cipherChunk)
+		cipherChunks = append(cipherChunks, chunk)
+	}
+	fs.mu.Unlock()
 
+	// Decrypt chunks without lock (can be parallel now)
+	var restoredData []byte
+	var restoredBytes int64
+
+	for i, chunk := range cipherChunks {
 		// Decrypt chunk
-		nonce := fs.chunkNonce(entry.NonceSeed, i)
-		plain, err := fs.aead.Open(nil, nonce[:], cipherChunk[:n], nil)
+		nonce := fs.chunkNonce(entry.NonceSeed, uint32(i))
+		plain, err := fs.aead.Open(nil, nonce[:], chunk, nil)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt chunk %d: %w", i, err)
 		}
 
-		// Only take what belongs to file (avoid padding)
-		filePos := int64(i) * int64(fs.chunkSize)
-		chunkDataLen := min(int64(len(plain)), dataSize-filePos)
-		if chunkDataLen > 0 {
-			allData = append(allData, plain[:chunkDataLen]...)
-		}
-
-		// Stop if we have enough data
-		if int64(len(allData)) >= dataSize {
+		// Only take what belongs to file (avoid padding in final chunk)
+		remaining := storedSize - restoredBytes
+		if remaining <= 0 {
 			break
 		}
+
+		writeLen := int64(len(plain))
+		if remaining < writeLen {
+			writeLen = remaining
+		}
+
+		restoredData = append(restoredData, plain[:writeLen]...)
+		restoredBytes += writeLen
 	}
 
-	// Extract requested bytes
-	if offset > int64(len(allData)) {
-		return []byte{}, nil
+	if restoredBytes != storedSize {
+		return nil, fmt.Errorf("restored size mismatch: got %d want %d", restoredBytes, storedSize)
 	}
 
-	end := offset + length
-	if end > int64(len(allData)) {
-		end = int64(len(allData))
-	}
-
-	result := allData[offset:end]
-
-	// Decompress if needed (like decryptFileEntry does) - must decompress BEFORE extracting offset
+	// Decompress if needed - decompress without lock
+	var finalData []byte
 	if entry.Compressed {
-		zr, err := gzip.NewReader(bytes.NewReader(allData))
+		zr, err := gzip.NewReader(bytes.NewReader(restoredData))
 		if err != nil {
 			return nil, fmt.Errorf("create gzip reader: %w", err)
 		}
@@ -609,19 +604,22 @@ func (fs *ReadOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 		if closeErr != nil {
 			return nil, fmt.Errorf("close gzip reader: %w", closeErr)
 		}
-
-		// Now extract from decompressed data
-		if offset > int64(len(decompressed)) {
-			return []byte{}, nil
-		}
-		end := offset + length
-		if end > int64(len(decompressed)) {
-			end = int64(len(decompressed))
-		}
-		result = decompressed[offset:end]
+		finalData = decompressed
+	} else {
+		finalData = restoredData
 	}
 
-	return result, nil
+	// Extract requested bytes from final data
+	if offset > int64(len(finalData)) {
+		return []byte{}, nil
+	}
+
+	end := offset + length
+	if end > int64(len(finalData)) {
+		end = int64(len(finalData))
+	}
+
+	return finalData[offset:end], nil
 }
 
 func (fs *ReadOnlyFS) chunkNonce(seed [8]byte, chunk uint32) [12]byte {

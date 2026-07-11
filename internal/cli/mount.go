@@ -78,6 +78,19 @@ func newMountCmd() *cobra.Command {
 				host.Unmount()
 			}()
 
+			// Recover from panic if WinFSP is not installed
+			defer func() {
+				if r := recover(); r != nil {
+					panicMsg := fmt.Sprintf("%v", r)
+					if strings.Contains(panicMsg, "cannot find winfsp") {
+						fmt.Fprintf(os.Stderr, "\nError: WinFSP is not installed.\n")
+						fmt.Fprintf(os.Stderr, "Please install WinFSP from: https://github.com/winfsp/winfsp/releases\n")
+						os.Exit(1)
+					}
+					panic(r)
+				}
+			}()
+
 			// Block on Mount - will return when unmounted by signal handler
 			if !host.Mount(mountPoint, mountOptions) {
 				return fmt.Errorf("failed to mount at %s", mountPoint)
