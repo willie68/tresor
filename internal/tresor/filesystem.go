@@ -25,7 +25,9 @@ type ReadOnlyFS struct {
 	aead          cipher.AEAD
 	containerFile *os.File
 	chunkSize     uint32
-	mu            sync.Mutex // Protects containerFile reads
+	totalSize     uint64        // Total size of all files
+	volumeLabel   string        // Volume label (container name without extension)
+	mu            sync.Mutex    // Protects containerFile reads
 }
 
 // NewReadOnlyFS creates a new read-only filesystem for a tresor container
@@ -90,6 +92,34 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 	}
 
 	fs.chunkSize = fs.index.ChunkSize
+
+	// Calculate total size and volume label
+	var totalSize uint64
+	for _, entry := range fs.index.Entries {
+		if entry.Type == 0 { // Regular file
+			if entry.Compressed && entry.Size > 0 {
+				totalSize += uint64(entry.Size)
+			} else if entry.StoredSize > 0 {
+				totalSize += uint64(entry.StoredSize)
+			} else {
+				totalSize += uint64(entry.Size)
+			}
+		}
+	}
+	fs.totalSize = totalSize
+
+	// Set volume label from container filename (without extension)
+	containerName := containerPath
+	if idx := strings.LastIndex(containerName, "\\"); idx != -1 {
+		containerName = containerName[idx+1:]
+	}
+	if idx := strings.LastIndex(containerName, "/"); idx != -1 {
+		containerName = containerName[idx+1:]
+	}
+	if strings.HasSuffix(strings.ToLower(containerName), ".tre") {
+		containerName = containerName[:len(containerName)-4]
+	}
+	fs.volumeLabel = containerName
 
 	// Open container file for later reading
 	fs.containerFile, err = os.Open(containerPath)
@@ -355,11 +385,12 @@ func (fs *ReadOnlyFS) Fsync(path string, datasync bool, fh uint64) int {
 // Statfs returns filesystem statistics
 func (fs *ReadOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
-	stat.Blocks = 1000000
-	stat.Bfree = 1000000
-	stat.Bavail = 1000000
+	totalBlocks := (fs.totalSize + 4095) / 4096 // Round up to next block
+	stat.Blocks = totalBlocks
+	stat.Bfree = 0   // Read-only filesystem
+	stat.Bavail = 0  // No available space for writing
 	stat.Files = uint64(len(fs.index.Entries))
-	stat.Ffree = 1000000
+	stat.Ffree = 0   // No available files for creating
 	stat.Namemax = 255
 	return 0
 }

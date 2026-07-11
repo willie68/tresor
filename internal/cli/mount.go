@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"tresor/internal/tresor"
@@ -51,6 +53,19 @@ func newMountCmd() *cobra.Command {
 			// Mount the filesystem
 			host := fuse.NewFileSystemHost(fs)
 
+			// Extract volume label from container filename (without extension)
+			volumeLabel := filepath.Base(containerPath)
+			if strings.HasSuffix(strings.ToLower(volumeLabel), ".tre") {
+				volumeLabel = volumeLabel[:len(volumeLabel)-4]
+			}
+			// Truncate to 32 chars max for Windows compatibility
+			if len(volumeLabel) > 32 {
+				volumeLabel = volumeLabel[:32]
+			}
+
+			// Create mount options with volume label
+			mountOptions := []string{fmt.Sprintf("-o VolumeLabel=%s", volumeLabel)}
+
 			fmt.Printf("mounted %q at %q (read-only)\n", containerPath, mountPoint)
 			fmt.Println("Press Ctrl+C to unmount")
 			os.Stdout.Sync()
@@ -64,7 +79,7 @@ func newMountCmd() *cobra.Command {
 			}()
 
 			// Block on Mount - will return when unmounted by signal handler
-			if !host.Mount(mountPoint, nil) {
+			if !host.Mount(mountPoint, mountOptions) {
 				return fmt.Errorf("failed to mount at %s", mountPoint)
 			}
 
