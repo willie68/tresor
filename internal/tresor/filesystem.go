@@ -96,7 +96,7 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 	// Calculate total size and volume label
 	var totalSize uint64
 	for _, entry := range fs.index.Entries {
-		if entry.Type == 0 { // Regular file
+		if entry.Type == entryTypeFile { // Regular file
 			if entry.Compressed && entry.Size > 0 {
 				totalSize += uint64(entry.Size)
 			} else if entry.StoredSize > 0 {
@@ -130,7 +130,7 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 	// Validate file sizes for all entries
 	for i := range fs.index.Entries {
 		entry := &fs.index.Entries[i]
-		if entry.Type == 0 { // Regular file
+		if entry.Type == entryTypeFile { // Regular file
 			if entry.Size <= 0 && entry.StoredSize <= 0 {
 				return nil, fmt.Errorf("entry %q has no valid size", entry.Path)
 			}
@@ -172,7 +172,7 @@ func (fs *ReadOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 		return -fuse.ENOENT
 	}
 
-	if entry.Type == 1 { // Directory
+	if entry.Type == entryTypeDir { // Directory
 		stat.Mode = 0o40555 // dr-xr-xr-x
 	} else { // File
 		stat.Mode = 0o100444 // -r--r--r--
@@ -186,7 +186,7 @@ func (fs *ReadOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	}
 
 	if entry.ModTime > 0 {
-		stat.Mtim = fuse.NewTimespec(time.Unix(0, entry.ModTime))
+		stat.Mtim = fuse.NewTimespec(time.Unix(entry.ModTime, 0))
 	}
 
 	return 0
@@ -202,7 +202,7 @@ func (fs *ReadOnlyFS) Open(path string, flags int) (errc int, fh uint64) {
 	}
 
 	entry := fs.findEntry(path)
-	if entry == nil || entry.Type == 1 { // Not found or is directory
+	if entry == nil || entry.Type == entryTypeDir { // Not found or is directory
 		return -fuse.ENOENT, 0
 	}
 
@@ -214,7 +214,7 @@ func (fs *ReadOnlyFS) Read(path string, buff []byte, ofst int64, fh uint64) int 
 	path = normalizePath(path)
 
 	entry := fs.findEntry(path)
-	if entry == nil || entry.Type == 1 {
+	if entry == nil || entry.Type == entryTypeDir {
 		return -fuse.ENOENT
 	}
 
@@ -270,7 +270,7 @@ func (fs *ReadOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Sta
 
 	for _, child := range children {
 		stat := fuse.Stat_t{}
-		if child.Type == 1 { // Directory
+		if child.Type == entryTypeDir { // Directory
 			stat.Mode = 0o40555 // dr-xr-xr-x
 		} else { // File
 			stat.Mode = 0o100444 // -r--r--r--
@@ -284,7 +284,7 @@ func (fs *ReadOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Sta
 		}
 
 		if child.ModTime > 0 {
-			stat.Mtim = fuse.NewTimespec(time.Unix(0, child.ModTime))
+			stat.Mtim = fuse.NewTimespec(time.Unix(child.ModTime, 0))
 		}
 
 		// Extract just the name
