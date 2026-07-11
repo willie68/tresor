@@ -25,9 +25,9 @@ type ReadOnlyFS struct {
 	aead          cipher.AEAD
 	containerFile *os.File
 	chunkSize     uint32
-	totalSize     uint64        // Total size of all files
-	volumeLabel   string        // Volume label (container name without extension)
-	mu            sync.Mutex    // Protects containerFile reads
+	totalSize     uint64     // Total size of all files
+	volumeLabel   string     // Volume label (container name without extension)
+	mu            sync.Mutex // Protects containerFile reads
 }
 
 // NewReadOnlyFS creates a new read-only filesystem for a tresor container
@@ -387,10 +387,10 @@ func (fs *ReadOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
 	totalBlocks := (fs.totalSize + 4095) / 4096 // Round up to next block
 	stat.Blocks = totalBlocks
-	stat.Bfree = 0   // Read-only filesystem
-	stat.Bavail = 0  // No available space for writing
+	stat.Bfree = 0  // Read-only filesystem
+	stat.Bavail = 0 // No available space for writing
 	stat.Files = uint64(len(fs.index.Entries))
-	stat.Ffree = 0   // No available files for creating
+	stat.Ffree = 0 // No available files for creating
 	stat.Namemax = 255
 	return 0
 }
