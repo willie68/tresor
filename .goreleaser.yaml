@@ -12,9 +12,10 @@ builds:
     binary: tresor
     env:
       - CGO_ENABLED=0
+    flags:
+      - -tags=nocgo
     ldflags:
       - -X main.Version={{.Version}}
-      - -tags nocgo
     goos:
       - windows
     goarch:
