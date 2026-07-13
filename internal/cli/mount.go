@@ -63,8 +63,15 @@ func newMountCmd() *cobra.Command {
 				volumeLabel = volumeLabel[:32]
 			}
 
-			// Create mount options with volume label
-			mountOptions := []string{fmt.Sprintf("-o VolumeLabel=%s", volumeLabel)}
+			os.Setenv("FSP_FUSE_VOLUME_NAME", volumeLabel)
+			// Create mount options with volume label and capacity hints
+			mountOptions := []string{
+				//"-o", fmt.Sprintf("VolumeName=%s", volumeLabel),
+				"-o", "allow_other",
+				"-o", "uid=500,gid=500",
+				"-o", "FileSystemName=NTFS", // Täuscht ein Standard-Dateisystem vor
+				"-o", fmt.Sprintf("volname=%s", volumeLabel),
+			}
 
 			fmt.Printf("mounted %q at %q (read-only)\n", containerPath, mountPoint)
 			fmt.Println("Press Ctrl+C to unmount")

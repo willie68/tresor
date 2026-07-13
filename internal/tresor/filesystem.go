@@ -148,9 +148,13 @@ func (fs *ReadOnlyFS) Close() error {
 func (fs *ReadOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	path = normalizePath(path)
 
-	// Root directory
-	if path == "" {
-		stat.Mode = 0o40555 // dr-xr-xr-x
+	// 2. Eindeutige und vollständige Prüfung auf das Root-Verzeichnis
+	if path == "/" || path == "" || path == "\\" {
+		stat.Mode = fuse.S_IFDIR | 0o755 // Verzeichnis + Read/Execute
+		stat.Nlink = 2
+		stat.Uid = 0 // Unter Windows ist 0 (Root/Admin) sicherer
+		stat.Gid = 0
+		stat.Ino = 1 // CRITICAL: Windows verlangt eine valide Inode für die Root!
 		return 0
 	}
 
@@ -320,22 +324,22 @@ func (fs *ReadOnlyFS) Utime(path string, tmsp *fuse.Timespec, amtsp *fuse.Timesp
 
 // Mkdir is not supported in read-only mode
 func (fs *ReadOnlyFS) Mkdir(path string, mode uint32) int {
-	return -fuse.EACCES
+	return -fuse.EROFS
 }
 
 // Unlink is not supported in read-only mode
 func (fs *ReadOnlyFS) Unlink(path string) int {
-	return -fuse.EACCES
+	return -fuse.EROFS
 }
 
 // Rmdir is not supported in read-only mode
 func (fs *ReadOnlyFS) Rmdir(path string) int {
-	return -fuse.EACCES
+	return -fuse.EROFS
 }
 
 // Rename is not supported in read-only mode
 func (fs *ReadOnlyFS) Rename(oldpath string, newpath string) int {
-	return -fuse.EACCES
+	return -fuse.EROFS
 }
 
 // Link is not supported in read-only mode
@@ -355,12 +359,12 @@ func (fs *ReadOnlyFS) Readlink(path string) (errc int, target string) {
 
 // Create is not supported in read-only mode
 func (fs *ReadOnlyFS) Create(path string, flags int, mode uint32) (errc int, fh uint64) {
-	return -fuse.EACCES, 0
+	return -fuse.EROFS, 0
 }
 
 // Write is not supported in read-only mode
 func (fs *ReadOnlyFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
-	return -fuse.EACCES
+	return -fuse.EROFS
 }
 
 // Flush is not needed for read-only filesystem
@@ -375,14 +379,16 @@ func (fs *ReadOnlyFS) Fsync(path string, datasync bool, fh uint64) int {
 
 // Statfs returns filesystem statistics
 func (fs *ReadOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
-	stat.Bsize = 4096
-	totalBlocks := (fs.totalSize + 4095) / 4096 // Round up to next block
+	fmt.Printf("Statfs für '%s' aufgerufen!\n", path)
+	stat.Bsize = uint64(4096)
+	stat.Frsize = uint64(4096)
+	totalBlocks := uint64((fs.totalSize + 4095) / 4096) // Round up to next block
 	stat.Blocks = totalBlocks
 	stat.Bfree = 0  // Read-only filesystem
 	stat.Bavail = 0 // No available space for writing
 	stat.Files = uint64(len(fs.index.Entries))
-	stat.Ffree = 0 // No available files for creating
-	stat.Namemax = 255
+	stat.Ffree = uint64(0) // No available files for creating
+	stat.Namemax = uint64(255)
 	return 0
 }
 
