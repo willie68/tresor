@@ -18,6 +18,8 @@ builds:
       - -X main.Version={{.Version}}
     goos:
       - windows
+      - linux
+      - darwin
     goarch:
       - amd64
 

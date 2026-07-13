@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.8.3`
+Current release: `v0.9.0`
 
 ## Commands
 
@@ -122,20 +122,16 @@ If files already exist during extract, use `--on-conflict` to define behavior (s
 ```bash
 tresor mount x:
 tresor mount y: --file e:\temp\meintresor.tre
-tresor mount /mnt/tresor
 ```
 
 Mount a tresor container as a read-only filesystem using FUSE (Filesystem in Userspace).
 
-Supported platforms:
-- **Windows**: Uses WinFSP for FUSE support (via cgofuse)
-- **Linux/macOS**: Uses native FUSE support
+**Supported platforms:**
+- **Windows only** (requires WinFSP)
 
 **Requirements:**
 
-- **Windows**: [WinFSP](https://github.com/winfsp/winfsp/releases) must be installed. Download and install the appropriate version for your system.
-- **Linux**: FUSE package must be installed (usually pre-installed or available via package manager)
-- **macOS**: FUSE for macOS must be installed
+- **Windows**: [WinFSP](https://github.com/winfsp/winfsp/releases) must be installed
 
 Features:
 - Read-only access to all files and directories in the container

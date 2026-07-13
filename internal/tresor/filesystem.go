@@ -1,3 +1,5 @@
+//go:build windows
+
 package tresor
 
 import (
@@ -17,8 +19,8 @@ import (
 	"github.com/winfsp/cgofuse/fuse"
 )
 
-// ReadOnlyFS provides a FUSE filesystem interface for decrypting and serving tresor files
-type ReadOnlyFS struct {
+// readOnlyFS provides a FUSE filesystem interface for decrypting and serving tresor files
+type readOnlyFS struct {
 	containerPath string
 	password      string
 	index         archiveIndex
@@ -31,8 +33,8 @@ type ReadOnlyFS struct {
 }
 
 // NewReadOnlyFS creates a new read-only filesystem for a tresor container
-func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
-	fs := &ReadOnlyFS{
+func NewReadOnlyFS(containerPath, password string) (*readOnlyFS, error) {
+	fs := &readOnlyFS{
 		containerPath: containerPath,
 		password:      password,
 	}
@@ -137,7 +139,7 @@ func NewReadOnlyFS(containerPath, password string) (*ReadOnlyFS, error) {
 }
 
 // Close closes the filesystem
-func (fs *ReadOnlyFS) Close() error {
+func (fs *readOnlyFS) Close() error {
 	if fs.containerFile != nil {
 		return fs.containerFile.Close()
 	}
@@ -145,7 +147,7 @@ func (fs *ReadOnlyFS) Close() error {
 }
 
 // Getattr gets file attributes
-func (fs *ReadOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+func (fs *readOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	path = normalizePath(path)
 
 	// 2. Eindeutige und vollständige Prüfung auf das Root-Verzeichnis
@@ -190,7 +192,7 @@ func (fs *ReadOnlyFS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 // Open opens a file
-func (fs *ReadOnlyFS) Open(path string, flags int) (errc int, fh uint64) {
+func (fs *readOnlyFS) Open(path string, flags int) (errc int, fh uint64) {
 	path = normalizePath(path)
 
 	// Only allow read operations
@@ -207,7 +209,7 @@ func (fs *ReadOnlyFS) Open(path string, flags int) (errc int, fh uint64) {
 }
 
 // Read reads from a file
-func (fs *ReadOnlyFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
+func (fs *readOnlyFS) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	path = normalizePath(path)
 
 	entry := fs.findEntry(path)
@@ -248,7 +250,7 @@ func (fs *ReadOnlyFS) Read(path string, buff []byte, ofst int64, fh uint64) int 
 }
 
 // Opendir opens a directory
-func (fs *ReadOnlyFS) Opendir(path string) (errc int, fh uint64) {
+func (fs *readOnlyFS) Opendir(path string) (errc int, fh uint64) {
 	path = normalizePath(path)
 
 	if path == "" || fs.isDirectoryPrefix(path) || fs.findEntry(path) != nil {
@@ -259,7 +261,7 @@ func (fs *ReadOnlyFS) Opendir(path string) (errc int, fh uint64) {
 }
 
 // Readdir reads directory entries
-func (fs *ReadOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) (errc int) {
+func (fs *readOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) (errc int) {
 	path = normalizePath(path)
 
 	// Get all entries that are direct children of this path
@@ -298,87 +300,87 @@ func (fs *ReadOnlyFS) Readdir(path string, fill func(name string, stat *fuse.Sta
 }
 
 // Release releases a file handle
-func (fs *ReadOnlyFS) Release(path string, fh uint64) int {
+func (fs *readOnlyFS) Release(path string, fh uint64) int {
 	return 0
 }
 
 // Releasedir releases a directory handle
-func (fs *ReadOnlyFS) Releasedir(path string, fh uint64) int {
+func (fs *readOnlyFS) Releasedir(path string, fh uint64) int {
 	return 0
 }
 
 // Chmod is not supported in read-only mode
-func (fs *ReadOnlyFS) Chmod(path string, mode uint32) int {
+func (fs *readOnlyFS) Chmod(path string, mode uint32) int {
 	return -fuse.EACCES
 }
 
 // Chown is not supported in read-only mode
-func (fs *ReadOnlyFS) Chown(path string, uid uint32, gid uint32) int {
+func (fs *readOnlyFS) Chown(path string, uid uint32, gid uint32) int {
 	return -fuse.EACCES
 }
 
 // Utime is not supported in read-only mode
-func (fs *ReadOnlyFS) Utime(path string, tmsp *fuse.Timespec, amtsp *fuse.Timespec) int {
+func (fs *readOnlyFS) Utime(path string, tmsp *fuse.Timespec, amtsp *fuse.Timespec) int {
 	return -fuse.EACCES
 }
 
 // Mkdir is not supported in read-only mode
-func (fs *ReadOnlyFS) Mkdir(path string, mode uint32) int {
+func (fs *readOnlyFS) Mkdir(path string, mode uint32) int {
 	return -fuse.EROFS
 }
 
 // Unlink is not supported in read-only mode
-func (fs *ReadOnlyFS) Unlink(path string) int {
+func (fs *readOnlyFS) Unlink(path string) int {
 	return -fuse.EROFS
 }
 
 // Rmdir is not supported in read-only mode
-func (fs *ReadOnlyFS) Rmdir(path string) int {
+func (fs *readOnlyFS) Rmdir(path string) int {
 	return -fuse.EROFS
 }
 
 // Rename is not supported in read-only mode
-func (fs *ReadOnlyFS) Rename(oldpath string, newpath string) int {
+func (fs *readOnlyFS) Rename(oldpath string, newpath string) int {
 	return -fuse.EROFS
 }
 
 // Link is not supported in read-only mode
-func (fs *ReadOnlyFS) Link(oldpath string, newpath string) int {
+func (fs *readOnlyFS) Link(oldpath string, newpath string) int {
 	return -fuse.EACCES
 }
 
 // Symlink is not supported in read-only mode
-func (fs *ReadOnlyFS) Symlink(target string, linkpath string) int {
+func (fs *readOnlyFS) Symlink(target string, linkpath string) int {
 	return -fuse.EACCES
 }
 
 // Readlink is not supported
-func (fs *ReadOnlyFS) Readlink(path string) (errc int, target string) {
+func (fs *readOnlyFS) Readlink(path string) (errc int, target string) {
 	return -fuse.ENOSYS, ""
 }
 
 // Create is not supported in read-only mode
-func (fs *ReadOnlyFS) Create(path string, flags int, mode uint32) (errc int, fh uint64) {
+func (fs *readOnlyFS) Create(path string, flags int, mode uint32) (errc int, fh uint64) {
 	return -fuse.EROFS, 0
 }
 
 // Write is not supported in read-only mode
-func (fs *ReadOnlyFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
+func (fs *readOnlyFS) Write(path string, buff []byte, ofst int64, fh uint64) int {
 	return -fuse.EROFS
 }
 
 // Flush is not needed for read-only filesystem
-func (fs *ReadOnlyFS) Flush(path string, fh uint64) int {
+func (fs *readOnlyFS) Flush(path string, fh uint64) int {
 	return 0
 }
 
 // Fsync is not needed for read-only filesystem
-func (fs *ReadOnlyFS) Fsync(path string, datasync bool, fh uint64) int {
+func (fs *readOnlyFS) Fsync(path string, datasync bool, fh uint64) int {
 	return 0
 }
 
 // Statfs returns filesystem statistics
-func (fs *ReadOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
+func (fs *readOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 	fmt.Printf("Statfs für '%s' aufgerufen!\n", path)
 	stat.Bsize = uint64(4096)
 	stat.Frsize = uint64(4096)
@@ -393,7 +395,7 @@ func (fs *ReadOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
 }
 
 // Access checks if path is accessible with given mode
-func (fs *ReadOnlyFS) Access(path string, mask uint32) int {
+func (fs *readOnlyFS) Access(path string, mask uint32) int {
 	path = normalizePath(path)
 
 	if path == "" {
@@ -422,7 +424,7 @@ func normalizePath(path string) string {
 	return path
 }
 
-func (fs *ReadOnlyFS) findEntry(path string) *archiveEntry {
+func (fs *readOnlyFS) findEntry(path string) *archiveEntry {
 	for _, entry := range fs.index.Entries {
 		entryPath := strings.TrimPrefix(entry.Path, "/")
 		if entryPath == path {
@@ -432,7 +434,7 @@ func (fs *ReadOnlyFS) findEntry(path string) *archiveEntry {
 	return nil
 }
 
-func (fs *ReadOnlyFS) isDirectoryPrefix(path string) bool {
+func (fs *readOnlyFS) isDirectoryPrefix(path string) bool {
 	if path == "" {
 		return true
 	}
@@ -445,7 +447,7 @@ func (fs *ReadOnlyFS) isDirectoryPrefix(path string) bool {
 	return false
 }
 
-func (fs *ReadOnlyFS) getDirectoryChildren(path string) []*archiveEntry {
+func (fs *readOnlyFS) getDirectoryChildren(path string) []*archiveEntry {
 	var children []*archiveEntry
 	seen := make(map[string]bool)
 
@@ -506,7 +508,7 @@ func (fs *ReadOnlyFS) getDirectoryChildren(path string) []*archiveEntry {
 	return children
 }
 
-func (fs *ReadOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length int64) ([]byte, error) {
+func (fs *readOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length int64) ([]byte, error) {
 	if fs.containerFile == nil {
 		return nil, errors.New("container file not open")
 	}
@@ -628,7 +630,7 @@ func (fs *ReadOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 	return finalData[offset:end], nil
 }
 
-func (fs *ReadOnlyFS) chunkNonce(seed [8]byte, chunk uint32) [12]byte {
+func (fs *readOnlyFS) chunkNonce(seed [8]byte, chunk uint32) [12]byte {
 	var nonce [12]byte
 	copy(nonce[:8], seed[:])
 	binary.LittleEndian.PutUint32(nonce[8:], chunk)
@@ -643,51 +645,51 @@ func min(a, b int64) int64 {
 }
 
 // Init is called when the file system is created
-func (fs *ReadOnlyFS) Init() {
+func (fs *readOnlyFS) Init() {
 	// Nothing to initialize
 }
 
 // Destroy is called when the file system is destroyed
-func (fs *ReadOnlyFS) Destroy() {
+func (fs *readOnlyFS) Destroy() {
 	// Nothing to clean up (Close() handles it)
 }
 
 // Mknod is not supported in read-only mode
-func (fs *ReadOnlyFS) Mknod(path string, mode uint32, dev uint64) int {
+func (fs *readOnlyFS) Mknod(path string, mode uint32, dev uint64) int {
 	return -fuse.EACCES
 }
 
 // Utimens changes the access and modification times of a file
-func (fs *ReadOnlyFS) Utimens(path string, tmsp []fuse.Timespec) int {
+func (fs *readOnlyFS) Utimens(path string, tmsp []fuse.Timespec) int {
 	return -fuse.EACCES
 }
 
 // Truncate changes the size of a file
-func (fs *ReadOnlyFS) Truncate(path string, size int64, fh uint64) int {
+func (fs *readOnlyFS) Truncate(path string, size int64, fh uint64) int {
 	return -fuse.EACCES
 }
 
 // Fsyncdir synchronizes directory contents
-func (fs *ReadOnlyFS) Fsyncdir(path string, datasync bool, fh uint64) int {
+func (fs *readOnlyFS) Fsyncdir(path string, datasync bool, fh uint64) int {
 	return 0
 }
 
 // Setxattr sets extended attributes
-func (fs *ReadOnlyFS) Setxattr(path string, name string, value []byte, flags int) int {
+func (fs *readOnlyFS) Setxattr(path string, name string, value []byte, flags int) int {
 	return -fuse.EACCES
 }
 
 // Getxattr gets extended attributes
-func (fs *ReadOnlyFS) Getxattr(path string, name string) (int, []byte) {
+func (fs *readOnlyFS) Getxattr(path string, name string) (int, []byte) {
 	return -fuse.ENODATA, nil
 }
 
 // Removexattr removes extended attributes
-func (fs *ReadOnlyFS) Removexattr(path string, name string) int {
+func (fs *readOnlyFS) Removexattr(path string, name string) int {
 	return -fuse.EACCES
 }
 
 // Listxattr lists extended attributes
-func (fs *ReadOnlyFS) Listxattr(path string, fill func(name string) bool) int {
+func (fs *readOnlyFS) Listxattr(path string, fill func(name string) bool) int {
 	return 0
 }
