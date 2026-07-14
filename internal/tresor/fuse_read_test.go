@@ -25,8 +25,8 @@ func TestFUSEReadSmallFile(t *testing.T) {
 			t.Fatalf("encrypt failed: %v", err)
 		}
 
-		// Create ReadOnlyFS
-		fs, err := NewReadOnlyFS(containerPath, "topsecret")
+		// Create ReadOnlyFS with cache
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 10*1024*1024)
 		if err != nil {
 			t.Fatalf("NewReadOnlyFS failed: %v", err)
 		}
@@ -96,7 +96,7 @@ func TestFUSEReadVerySmallFile(t *testing.T) {
 			t.Fatalf("encrypt failed: %v", err)
 		}
 
-		fs, err := NewReadOnlyFS(containerPath, "topsecret")
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 10*1024*1024)
 		if err != nil {
 			t.Fatalf("NewReadOnlyFS failed: %v", err)
 		}

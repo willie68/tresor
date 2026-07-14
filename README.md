@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.9.0`
+Current release: `v0.10.0`
 
 ## Commands
 
@@ -122,6 +122,7 @@ If files already exist during extract, use `--on-conflict` to define behavior (s
 ```bash
 tresor mount x:
 tresor mount y: --file e:\temp\meintresor.tre
+tresor mount z: --cache-size 100              # With 100 MB file cache
 ```
 
 Mount a tresor container as a read-only filesystem using FUSE (Filesystem in Userspace).
@@ -133,11 +134,20 @@ Mount a tresor container as a read-only filesystem using FUSE (Filesystem in Use
 
 - **Windows**: [WinFSP](https://github.com/winfsp/winfsp/releases) must be installed
 
+**Options:**
+
+- `--file`: Container file path (defaults to `tresor.tre`)
+- `--cache-size`: File cache size in MB (defaults to 0 = no cache)
+  - Speeds up repeated file access by caching decrypted data in memory
+  - Useful for containers with frequently accessed files
+  - Example: `--cache-size 100` uses up to 100 MB RAM for caching
+
 Features:
 - Read-only access to all files and directories in the container
 - Transparent decompression of compressed files
 - Full file path and metadata support
 - Real-time access without extracting (files remain in encrypted container)
+- Optional in-memory file cache for improved performance
 
 Example:
 ```bash
@@ -164,6 +174,13 @@ tresor version
 ```
 
 Shows version, a short about text, and a license hint.
+
+## Resolved Issues In v0.10.0
+
+- File cache implementation: Added configurable in-memory cache for FUSE filesystem with LRU eviction
+- Mount cache parameter: New `--cache-size` flag (in MB) for optional file caching
+- Cache tests: Comprehensive test suite covering normal operations, edge cases, and eviction behavior
+- Filesystem cache integration: ReadOnlyFS now supports optional caching for improved performance
 
 ## Resolved Issues In v0.8.1
 

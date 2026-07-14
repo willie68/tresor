@@ -10,7 +10,7 @@ import (
 type readOnlyFS struct{}
 
 // NewReadOnlyFS returns an error on non-Windows platforms
-func NewReadOnlyFS(containerPath, password string) (*readOnlyFS, error) {
+func NewReadOnlyFS(containerPath, password string, cacheSize int64) (*readOnlyFS, error) {
 	return nil, errors.New("FUSE mount is only supported on Windows")
 }
 

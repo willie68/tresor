@@ -17,8 +17,9 @@ import (
 )
 
 type mountOptions struct {
-	password string
-	file     string
+	password  string
+	file      string
+	cacheSize int64 // Cache size in MB, 0 = no cache
 }
 
 func newMountCmd() *cobra.Command {
@@ -45,8 +46,11 @@ func newMountCmd() *cobra.Command {
 
 			containerPath := ensureTreeExtension(opts.file)
 
+			// Convert cache size from MB to bytes
+			cacheSizeBytes := opts.cacheSize * 1024 * 1024
+
 			// Create the filesystem
-			fs, err := tresor.NewReadOnlyFS(containerPath, password)
+			fs, err := tresor.NewReadOnlyFS(containerPath, password, cacheSizeBytes)
 			if err != nil {
 				return fmt.Errorf("create filesystem: %w", err)
 			}
@@ -111,6 +115,7 @@ func newMountCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
 	cmd.Flags().StringVar(&opts.file, "file", "", "Container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().Int64Var(&opts.cacheSize, "cache-size", 0, "Cache size in MB (0 = no cache, default = 0)")
 
 	return cmd
 }

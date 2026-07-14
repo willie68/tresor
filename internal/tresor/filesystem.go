@@ -30,14 +30,17 @@ type readOnlyFS struct {
 	totalSize     uint64     // Total size of all files
 	volumeLabel   string     // Volume label (container name without extension)
 	mu            sync.Mutex // Protects containerFile reads
+	cache         *FileCache // Optional cache for decrypted file data
 }
 
 // NewReadOnlyFS creates a new read-only filesystem for a tresor container
-func NewReadOnlyFS(containerPath, password string) (*readOnlyFS, error) {
+func NewReadOnlyFS(containerPath, password string, cacheSize int64) (*readOnlyFS, error) {
 	fs := &readOnlyFS{
 		containerPath: containerPath,
 		password:      password,
 	}
+
+	fs.cache = NewFileCache(cacheSize)
 
 	// Open container and read index
 	file, err := os.Open(containerPath)
@@ -381,7 +384,6 @@ func (fs *readOnlyFS) Fsync(path string, datasync bool, fh uint64) int {
 
 // Statfs returns filesystem statistics
 func (fs *readOnlyFS) Statfs(path string, stat *fuse.Statfs_t) int {
-	fmt.Printf("Statfs für '%s' aufgerufen!\n", path)
 	stat.Bsize = uint64(4096)
 	stat.Frsize = uint64(4096)
 	totalBlocks := uint64((fs.totalSize + 4095) / 4096) // Round up to next block
@@ -526,26 +528,117 @@ func (fs *readOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 	if offset >= maxSize {
 		return []byte{}, nil
 	}
+	var finalData []byte
+	if fs.cache.Has(entry.Path) {
+		finalData, _ = fs.cache.Get(entry.Path)
+	} else {
+		// Clamp length to file size
+		if offset+length > maxSize {
+			length = maxSize - offset
+		}
 
-	// Clamp length to file size
-	if offset+length > maxSize {
-		length = maxSize - offset
+		// Data size in container (what we read from container before potential decompression)
+		storedSize := entry.StoredSize
+		if storedSize == 0 {
+			storedSize = entry.Size
+		}
+		if storedSize < 0 {
+			return nil, errors.New("invalid stored size")
+		}
+
+		// Read all encrypted chunks with lock (minimize lock duration)
+		cipherChunks, err := fs.getChunks(entry)
+		if err != nil {
+			return nil, err
+		}
+
+		// Decrypt chunks without lock (can be parallel now)
+		var restoredData []byte
+
+		restoredBytes, restoredData, err := fs.restoreBytes(cipherChunks, entry, storedSize)
+		if err != nil {
+			return nil, err
+		}
+
+		if restoredBytes != storedSize {
+			return nil, fmt.Errorf("restored size mismatch: got %d want %d", restoredBytes, storedSize)
+		}
+
+		// Decompress if needed - decompress without lock
+		if entry.Compressed {
+			finalData, err = fs.decompressData(restoredData)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			finalData = restoredData
+		}
+
+		fs.cache.Set(entry.Path, finalData) // Cache the final data for future reads
 	}
 
-	// Data size in container (what we read from container before potential decompression)
-	storedSize := entry.StoredSize
-	if storedSize == 0 {
-		storedSize = entry.Size
-	}
-	if storedSize < 0 {
-		return nil, errors.New("invalid stored size")
+	// Extract requested bytes from final data
+	if offset > int64(len(finalData)) {
+		return []byte{}, nil
 	}
 
+	end := offset + length
+	if end > int64(len(finalData)) {
+		end = int64(len(finalData))
+	}
+
+	return finalData[offset:end], nil
+}
+
+func (*readOnlyFS) decompressData(restoredData []byte) ([]byte, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(restoredData))
+	if err != nil {
+		return nil, fmt.Errorf("create gzip reader: %w", err)
+	}
+	decompressed, err := io.ReadAll(zr)
+	closeErr := zr.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decompress: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close gzip reader: %w", closeErr)
+	}
+	return decompressed, nil
+}
+
+func (fs *readOnlyFS) restoreBytes(cipherChunks [][]byte, entry *archiveEntry, storedSize int64) (int64, []byte, error) {
+	restoredData := make([]byte, 0, storedSize)
+	restoredBytes := int64(0)
+	for i, chunk := range cipherChunks {
+		// Decrypt chunk
+		nonce := fs.chunkNonce(entry.NonceSeed, uint32(i))
+		plain, err := fs.aead.Open(nil, nonce[:], chunk, nil)
+		if err != nil {
+			return 0, nil, fmt.Errorf("decrypt chunk %d: %w", i, err)
+		}
+
+		// Only take what belongs to file (avoid padding in final chunk)
+		remaining := storedSize - restoredBytes
+		if remaining <= 0 {
+			break
+		}
+
+		writeLen := int64(len(plain))
+		if remaining < writeLen {
+			writeLen = remaining
+		}
+
+		restoredData = append(restoredData, plain[:writeLen]...)
+		restoredBytes += writeLen
+	}
+	return restoredBytes, restoredData, nil
+}
+
+func (fs *readOnlyFS) getChunks(entry *archiveEntry) ([][]byte, error) {
 	encChunkSize := int(fs.chunkSize) + aeadTagSize
 	cipherChunk := make([]byte, encChunkSize)
-	var cipherChunks [][]byte
+	cipherChunks := make([][]byte, 0, entry.ChunkCount)
 
-	// Read all encrypted chunks with lock (minimize lock duration)
 	fs.mu.Lock()
 	_, err := fs.containerFile.Seek(int64(entry.DataOffset), io.SeekStart)
 	if err != nil {
@@ -565,69 +658,7 @@ func (fs *readOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length 
 		cipherChunks = append(cipherChunks, chunk)
 	}
 	fs.mu.Unlock()
-
-	// Decrypt chunks without lock (can be parallel now)
-	var restoredData []byte
-	var restoredBytes int64
-
-	for i, chunk := range cipherChunks {
-		// Decrypt chunk
-		nonce := fs.chunkNonce(entry.NonceSeed, uint32(i))
-		plain, err := fs.aead.Open(nil, nonce[:], chunk, nil)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt chunk %d: %w", i, err)
-		}
-
-		// Only take what belongs to file (avoid padding in final chunk)
-		remaining := storedSize - restoredBytes
-		if remaining <= 0 {
-			break
-		}
-
-		writeLen := int64(len(plain))
-		if remaining < writeLen {
-			writeLen = remaining
-		}
-
-		restoredData = append(restoredData, plain[:writeLen]...)
-		restoredBytes += writeLen
-	}
-
-	if restoredBytes != storedSize {
-		return nil, fmt.Errorf("restored size mismatch: got %d want %d", restoredBytes, storedSize)
-	}
-
-	// Decompress if needed - decompress without lock
-	var finalData []byte
-	if entry.Compressed {
-		zr, err := gzip.NewReader(bytes.NewReader(restoredData))
-		if err != nil {
-			return nil, fmt.Errorf("create gzip reader: %w", err)
-		}
-		decompressed, err := io.ReadAll(zr)
-		closeErr := zr.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decompress: %w", err)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("close gzip reader: %w", closeErr)
-		}
-		finalData = decompressed
-	} else {
-		finalData = restoredData
-	}
-
-	// Extract requested bytes from final data
-	if offset > int64(len(finalData)) {
-		return []byte{}, nil
-	}
-
-	end := offset + length
-	if end > int64(len(finalData)) {
-		end = int64(len(finalData))
-	}
-
-	return finalData[offset:end], nil
+	return cipherChunks, nil
 }
 
 func (fs *readOnlyFS) chunkNonce(seed [8]byte, chunk uint32) [12]byte {
@@ -635,13 +666,6 @@ func (fs *readOnlyFS) chunkNonce(seed [8]byte, chunk uint32) [12]byte {
 	copy(nonce[:8], seed[:])
 	binary.LittleEndian.PutUint32(nonce[8:], chunk)
 	return nonce
-}
-
-func min(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Init is called when the file system is created

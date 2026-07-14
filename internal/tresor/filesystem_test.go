@@ -23,8 +23,8 @@ func TestReadOnlyFSReadSmallFile(t *testing.T) {
 			t.Fatalf("encrypt failed: %v", err)
 		}
 
-		// Create ReadOnlyFS
-		fs, err := NewReadOnlyFS(containerPath, "topsecret")
+		// Create ReadOnlyFS without cache
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 0)
 		if err != nil {
 			t.Fatalf("NewReadOnlyFS failed: %v", err)
 		}
@@ -112,8 +112,8 @@ func TestReadOnlyFSReadMultipleSmallFiles(t *testing.T) {
 			t.Fatalf("encrypt failed: %v", err)
 		}
 
-		// Create ReadOnlyFS
-		fs, err := NewReadOnlyFS(containerPath, "topsecret")
+		// Create ReadOnlyFS without cache
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 0)
 		if err != nil {
 			t.Fatalf("NewReadOnlyFS failed: %v", err)
 		}
@@ -149,7 +149,7 @@ func TestReadOnlyFSGetAttrSmallFile(t *testing.T) {
 			t.Fatalf("encrypt failed: %v", err)
 		}
 
-		fs, err := NewReadOnlyFS(containerPath, "topsecret")
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 0)
 		if err != nil {
 			t.Fatalf("NewReadOnlyFS failed: %v", err)
 		}
@@ -169,6 +169,200 @@ func TestReadOnlyFSGetAttrSmallFile(t *testing.T) {
 
 		if !bytes.Equal(buff[:n], testData) {
 			t.Errorf("Data mismatch.\nGot:  %q\nWant: %q", buff[:n], testData)
+		}
+	})
+}
+
+func TestReadOnlyFSWithCache(t *testing.T) {
+	tempDir := t.TempDir()
+	withWorkingDir(t, tempDir, func() {
+		// Create test file
+		testData := []byte("This is test data for cache validation.")
+		mustWriteFile(t, "test.txt", testData)
+
+		// Encrypt it
+		containerPath := "test.tre"
+		err := Encrypt(EncryptOptions{
+			Password:      "topsecret",
+			ContainerPath: containerPath,
+			Inputs:        []string{"test.txt"},
+		})
+		if err != nil {
+			t.Fatalf("encrypt failed: %v", err)
+		}
+
+		// Create ReadOnlyFS with cache (10 MB)
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 10*1024*1024)
+		if err != nil {
+			t.Fatalf("NewReadOnlyFS failed: %v", err)
+		}
+		defer fs.Close()
+
+		// First read
+		buff := make([]byte, len(testData))
+		n := fs.Read("test.txt", buff, 0, 0)
+		if n < 0 {
+			t.Fatalf("First read returned error: %d", n)
+		}
+		if !bytes.Equal(buff[:n], testData) {
+			t.Errorf("First read mismatch.\nGot:  %v\nWant: %v", buff[:n], testData)
+		}
+
+		// Second read - should be from cache
+		buff2 := make([]byte, len(testData))
+		n2 := fs.Read("test.txt", buff2, 0, 0)
+		if n2 < 0 {
+			t.Fatalf("Second read returned error: %d", n2)
+		}
+		if !bytes.Equal(buff2[:n2], testData) {
+			t.Errorf("Second read mismatch.\nGot:  %v\nWant: %v", buff2[:n2], testData)
+		}
+	})
+}
+
+func TestReadOnlyFSWithoutCache(t *testing.T) {
+	tempDir := t.TempDir()
+	withWorkingDir(t, tempDir, func() {
+		// Create test file
+		testData := []byte("Test data without cache.")
+		mustWriteFile(t, "test.txt", testData)
+
+		// Encrypt it
+		containerPath := "test.tre"
+		err := Encrypt(EncryptOptions{
+			Password:      "topsecret",
+			ContainerPath: containerPath,
+			Inputs:        []string{"test.txt"},
+		})
+		if err != nil {
+			t.Fatalf("encrypt failed: %v", err)
+		}
+
+		// Create ReadOnlyFS without cache (cacheSize = 0)
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 0)
+		if err != nil {
+			t.Fatalf("NewReadOnlyFS failed: %v", err)
+		}
+		defer fs.Close()
+
+		// Multiple reads without cache should still work
+		for i := 0; i < 3; i++ {
+			buff := make([]byte, len(testData))
+			n := fs.Read("test.txt", buff, 0, 0)
+			if n < 0 {
+				t.Fatalf("Read %d returned error: %d", i, n)
+			}
+			if !bytes.Equal(buff[:n], testData) {
+				t.Errorf("Read %d mismatch.\nGot:  %v\nWant: %v", i, buff[:n], testData)
+			}
+		}
+	})
+}
+
+func TestReadOnlyFSCacheMultipleFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	withWorkingDir(t, tempDir, func() {
+		// Create multiple test files
+		testFiles := map[string][]byte{
+			"file1.txt": []byte("Content of file 1"),
+			"file2.txt": []byte("Content of file 2 - with more data"),
+			"file3.txt": []byte("F3"),
+		}
+
+		for name, data := range testFiles {
+			mustWriteFile(t, name, data)
+		}
+
+		// Encrypt
+		containerPath := "test.tre"
+		inputs := []string{}
+		for name := range testFiles {
+			inputs = append(inputs, name)
+		}
+		err := Encrypt(EncryptOptions{
+			Password:      "topsecret",
+			ContainerPath: containerPath,
+			Inputs:        inputs,
+		})
+		if err != nil {
+			t.Fatalf("encrypt failed: %v", err)
+		}
+
+		// Create ReadOnlyFS with cache
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 10*1024*1024)
+		if err != nil {
+			t.Fatalf("NewReadOnlyFS failed: %v", err)
+		}
+		defer fs.Close()
+
+		// Read each file twice to test cache
+		for name, expectedData := range testFiles {
+			// First read
+			buff := make([]byte, len(expectedData))
+			n := fs.Read(name, buff, 0, 0)
+			if n < 0 {
+				t.Fatalf("First read of %s returned error: %d", name, n)
+			}
+			if !bytes.Equal(buff[:n], expectedData) {
+				t.Errorf("First read of %s mismatch.\nGot:  %q\nWant: %q", name, buff[:n], expectedData)
+			}
+
+			// Second read (should be from cache)
+			buff2 := make([]byte, len(expectedData))
+			n2 := fs.Read(name, buff2, 0, 0)
+			if n2 < 0 {
+				t.Fatalf("Second read of %s returned error: %d", name, n2)
+			}
+			if !bytes.Equal(buff2[:n2], expectedData) {
+				t.Errorf("Second read of %s mismatch.\nGot:  %q\nWant: %q", name, buff2[:n2], expectedData)
+			}
+		}
+	})
+}
+
+func TestReadOnlyFSCachePartialRead(t *testing.T) {
+	tempDir := t.TempDir()
+	withWorkingDir(t, tempDir, func() {
+		testData := []byte("This is a longer test file for partial read testing with cache.")
+		mustWriteFile(t, "test.txt", testData)
+
+		// Encrypt
+		containerPath := "test.tre"
+		err := Encrypt(EncryptOptions{
+			Password:      "topsecret",
+			ContainerPath: containerPath,
+			Inputs:        []string{"test.txt"},
+		})
+		if err != nil {
+			t.Fatalf("encrypt failed: %v", err)
+		}
+
+		// Create ReadOnlyFS with cache
+		fs, err := NewReadOnlyFS(containerPath, "topsecret", 10*1024*1024)
+		if err != nil {
+			t.Fatalf("NewReadOnlyFS failed: %v", err)
+		}
+		defer fs.Close()
+
+		// Partial reads at different offsets
+		testCases := []struct {
+			offset   int64
+			expected []byte
+		}{
+			{0, testData[:10]},
+			{5, testData[5:15]},
+			{20, testData[20 : 20+10]},
+		}
+
+		for i, tc := range testCases {
+			buff := make([]byte, len(tc.expected))
+			n := fs.Read("test.txt", buff, tc.offset, 0)
+			if n < 0 {
+				t.Fatalf("Partial read %d returned error: %d", i, n)
+			}
+			if !bytes.Equal(buff[:n], tc.expected) {
+				t.Errorf("Partial read %d mismatch.\nGot:  %q\nWant: %q", i, buff[:n], tc.expected)
+			}
 		}
 	})
 }
