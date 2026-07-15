@@ -66,9 +66,9 @@ func newDecryptCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
-	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove container file after successful decryption")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for decryption")
+	cmd.Flags().BoolVarP(&opts.remove, "remove", "r", false, "Remove container file after successful decryption")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Source container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|rename")
 
 	return cmd

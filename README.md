@@ -1,22 +1,31 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.11.0`
+Current release: `v0.12.0`
 
 ## Commands
+
+### Global Flags
+
+Common flags available across all commands:
+- `-p, --password`: Password for encryption/decryption
+- `-f, --file`: Container file path (`.tre`)
+- `-r, --remove`: Remove source/container file after successful operation
+- `-h, --help`: Show help information
 
 ### Encrypt
 
 ```bash
 tresor encrypt --remove mongodump\ minio\
 tresor encrypt --file e:\temp\meintresor.tre mongodump\ minio\
+tresor encrypt -p mypass -f archive.tre -r mongodump\ minio\  # Using short flags
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
 
 **Options:**
 
-- `--remove`: Remove source files after successful encryption (useful for cleanup after creating the container)
+- `-r, --remove`: Remove source files after successful encryption (useful for cleanup after creating the container)
 - `--if-exists`: Define behavior when target container already exists (see below)
 - `--on-conflict`: Define conflict handling during append operations (see below)
 
@@ -42,6 +51,7 @@ For automated scenarios with password:
 
 ```bash
 tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
+tresor encrypt -p <mein-passwort> -r mongodump\ minio\  # Using short flags
 ```
 
 #### Multi-Container Encryption
@@ -114,7 +124,21 @@ Default is `--on-conflict prompt`.
 ```bash
 tresor list
 tresor list --file e:\temp\meintresor.tre
+tresor list --filter ".jpg"              # All JPG files (case-insensitive)
+tresor list --filter "input/"            # Files in input directory and subdirectories
+tresor list --filter "/input/"           # Files directly in root input directory
 ```
+
+**Filter patterns** (case-insensitive):
+
+| Pattern | Matches | Examples |
+|---------|---------|----------|
+| `.jpg` | Files with extension `.jpg` | `photo.jpg`, `image.JPG`, `pic.jPg` |
+| `*.jpg` | Files ending with `.jpg` (wildcard) | `photo.jpg`, `image.JPG` |
+| `input` | Files containing "input" anywhere | `input`, `input/file.txt`, `my_input_file.pdf` |
+| `input/` | Files in directory (including subdirs) | `input/config.ini`, `input/nested/file.txt` |
+| `/input/` | Files directly in root directory only | `input/config.ini`, but NOT `input/nested/file.txt` |
+| `readme.pdf` | Exact filename (any location) | `readme.pdf`, `docs/readme.pdf` |
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
 

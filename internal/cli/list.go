@@ -13,6 +13,7 @@ import (
 type listOptions struct {
 	password string
 	file     string
+	filter   string
 }
 
 func newListCmd() *cobra.Command {
@@ -37,6 +38,7 @@ func newListCmd() *cobra.Command {
 			entries, err := tresor.List(tresor.ListOptions{
 				Password:      password,
 				ContainerPath: containerPath,
+				Filter:        opts.filter,
 			})
 			if err != nil {
 				return err
@@ -56,8 +58,9 @@ func newListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for listing")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for listing")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Source container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVar(&opts.filter, "filter", "", "Filter pattern: .jpg (extension), *.jpg (wildcard), input (substring), input\\ (directory), \\input\\ (root dir), file.pdf (exact name)")
 
 	return cmd
 }

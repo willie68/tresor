@@ -1105,6 +1105,63 @@ func TestMultiContainerAppendToMain(t *testing.T) {
 	})
 }
 
+func TestMatchesFilter(t *testing.T) {
+	tests := []struct {
+		path     string
+		filter   string
+		expected bool
+	}{
+		// Extension filter (case insensitive)
+		{"photo.jpg", ".jpg", true},
+		{"image.JPG", ".jpg", true},
+		{"photo.JPG", ".jpg", true},
+		{"document.pdf", ".jpg", false},
+
+		// Wildcard filter
+		{"photo.jpg", "*.jpg", true},
+		{"image.JPG", "*.jpg", true},
+		{"document.pdf", "*.jpg", false},
+
+		// Substring filter
+		{"input/config.ini", "input", true},
+		{"input/data.json", "input", true},
+		{"input", "input", true},
+		{"data.json", "input", false},
+		{"readme.txt", "input", false},
+
+		// Directory filter with trailing slash (files in directory and subdirectories)
+		{"input/config.ini", "input/", true},
+		{"input/data.json", "input/", true},
+		{"input/nested/file.txt", "input/", true},
+		{"input", "input/", false},
+		{"output/file.txt", "input/", false},
+
+		// Root directory filter (only direct children, not subdirectories)
+		{"input/config.ini", "/input/", true},
+		{"input/data.json", "/input/", true},
+		{"input/nested/file.txt", "/input/", false}, // Not a direct child
+		{"output/file.txt", "/input/", false},
+
+		// Exact name match (filename, matches in any directory)
+		{"readme.txt", "readme.txt", true},
+		{"readme.TXT", "readme.txt", true},
+		{"README.txt", "readme.txt", true},
+		{"readme.pdf", "readme.txt", false},
+		{"input/readme.txt", "readme.txt", true}, // Filename match includes subdirectories
+
+		// No filter
+		{"any.txt", "", true},
+		{"file.jpg", "", true},
+	}
+
+	for _, tt := range tests {
+		result := matchesFilter(tt.path, tt.filter)
+		if result != tt.expected {
+			t.Errorf("matchesFilter(%q, %q) = %v, want %v", tt.path, tt.filter, result, tt.expected)
+		}
+	}
+}
+
 // Helper functions
 func fileExists(t *testing.T, path string) bool {
 	t.Helper()

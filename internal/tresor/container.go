@@ -64,6 +64,7 @@ type DecryptOptions struct {
 type ListOptions struct {
 	Password      string
 	ContainerPath string
+	Filter        string // Filter pattern (e.g., ".jpg", "*.jpg", "input", "input\\", "\\input\\", "file.pdf")
 }
 
 type ListedEntry struct {
@@ -1250,6 +1251,73 @@ func decryptProcessEntry(cr *containerReader, aead cipher.AEAD, chunkSize uint32
 	return nil
 }
 
+// matchesFilter checks if a file path matches the given filter pattern.
+// Filter types:
+// - ".jpg" or ".JPG" etc: matches files with extension .jpg (case insensitive)
+// - "*.jpg": matches files ending with .jpg (wildcard)
+// - "input": matches files containing "input" anywhere in path (case insensitive)
+// - "input\\": matches files in directory "input\\" (subdirs of input)
+// - "\\input\\": matches files directly in root directory "input\\"
+// - "file.txt": exact filename match (case insensitive)
+func matchesFilter(path string, filter string) bool {
+	if filter == "" {
+		return true
+	}
+
+	lowerPath := strings.ToLower(path)
+	lowerFilter := strings.ToLower(filter)
+
+	// Normalize path separators to forward slash for consistency
+	lowerPath = strings.ReplaceAll(lowerPath, "\\", "/")
+	lowerFilter = strings.ReplaceAll(lowerFilter, "\\", "/")
+
+	// Case 1: Extension only (e.g., ".jpg")
+	if strings.HasPrefix(lowerFilter, ".") && !strings.Contains(lowerFilter[1:], ".") && !strings.Contains(lowerFilter, "/") {
+		return strings.HasSuffix(lowerPath, lowerFilter)
+	}
+
+	// Case 2: Wildcard pattern (e.g., "*.jpg")
+	if strings.HasPrefix(lowerFilter, "*." ) {
+		ext := strings.TrimPrefix(lowerFilter, "*")
+		return strings.HasSuffix(lowerPath, ext)
+	}
+
+	// Case 3: Root directory (e.g., "\input\\" or "/input/")
+	if strings.HasPrefix(lowerFilter, "/") && strings.HasSuffix(lowerFilter, "/") {
+		dir := strings.Trim(lowerFilter, "/")
+		// Match files directly in this root directory (no further nesting)
+		parts := strings.Split(lowerPath, "/")
+		if len(parts) == 2 && parts[0] == dir {
+			return true
+		}
+		return false
+	}
+
+	// Case 4: Subdirectory (e.g., "input/" or "input/")
+	if strings.HasSuffix(lowerFilter, "/") {
+		dir := strings.TrimSuffix(lowerFilter, "/")
+		// Match files in this directory or subdirectories
+		return strings.HasPrefix(lowerPath, dir+"/")
+	}
+
+	// Case 5: Full path match (contains slash in filter)
+	if strings.Contains(lowerFilter, "/") {
+		// Must match the full path exactly or as substring with proper boundaries
+		return lowerPath == lowerFilter || strings.Contains(lowerPath, "/"+lowerFilter)
+	}
+
+	// Default: substring or filename match
+	// If filter looks like a filename (contains dot), only match as exact path or with slash prefix
+	// Otherwise match anywhere as substring
+	if strings.Contains(lowerFilter, ".") && !strings.Contains(lowerFilter, "/") {
+		// Likely a filename - match only exact or with slash prefix
+		return lowerPath == lowerFilter || strings.Contains(lowerPath, "/"+lowerFilter)
+	}
+
+	// Generic substring match (for names like "input" without dots)
+	return strings.Contains(lowerPath, lowerFilter)
+}
+
 func List(opts ListOptions) ([]ListedEntry, error) {
 	if opts.Password == "" {
 		return nil, errors.New("password is required")
@@ -1271,7 +1339,10 @@ func List(opts ListOptions) ([]ListedEntry, error) {
 			Size:    entry.Size,
 			ModTime: entry.ModTime,
 		}
-		entries = append(entries, listed)
+		// Apply filter if specified
+		if opts.Filter == "" || matchesFilter(entry.Path, opts.Filter) {
+			entries = append(entries, listed)
+		}
 	}
 
 	sort.Slice(entries, func(i, j int) bool {

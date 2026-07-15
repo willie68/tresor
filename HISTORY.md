@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.12.0 (2026-07-15)
+- **Filter Support for List Command**
+  - Added `-filter` flag for listing container contents with pattern matching
+  - Supports 6 filter types: extension (`.jpg`), wildcard (`*.jpg`), substring (`input`), directory (`input/`), root directory (`/input/`), exact filename (`readme.pdf`)
+  - All filters are case-insensitive
+  - Examples: `tresor list --filter ".jpg"` or `tresor list --filter "input/"`
+
+- **Short Flag Aliases**
+  - Added short flag variants for common options:
+    - `-p` (short for `--password`)
+    - `-f` (short for `--file`)
+    - `-r` (short for `--remove`)
+    - `-h` (short for `--help`)
+  - Available across all commands: encrypt, decrypt, list, extract, mount
+  - Example: `tresor list -p mypass -f archive.tre --filter ".jpg"`
+
+- **Documentation Updates**
+  - Updated README with global flags section and short flag examples
+  - Added comprehensive filter pattern documentation with examples
+
 ## v0.8.0 (2026-07-11)
 - **FUSE Mount Improvements**
   - Fixed mount output buffering (messages now display immediately)

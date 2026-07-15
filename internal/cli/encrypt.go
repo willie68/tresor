@@ -67,9 +67,9 @@ func newEncryptCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for encryption")
-	cmd.Flags().BoolVar(&opts.remove, "remove", false, "Remove source files/directories after successful encryption")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Target container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for encryption")
+	cmd.Flags().BoolVarP(&opts.remove, "remove", "r", false, "Remove source paths after successful encryption")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Target container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().StringVar(&opts.ifExists, "if-exists", "sync", "Behavior if target container exists: sync|append")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior in append mode: prompt|ignore|overwrite|rename")
 	cmd.Flags().Int64Var(&opts.maxSize, "max-size", 0, "Maximum size per container file in MB (0 = unlimited, all data in single file)")

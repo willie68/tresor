@@ -113,8 +113,8 @@ func newMountCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for decryption")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for decryption")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().Int64Var(&opts.cacheSize, "cache-size", 0, "Cache size in MB (0 = no cache, default = 0)")
 
 	return cmd

@@ -74,8 +74,8 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.password, "password", "", "Password used for extraction")
-	cmd.Flags().StringVar(&opts.file, "file", "", "Source container file path (.tre); defaults to tresor.tre")
+	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for extraction")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Source container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().BoolVar(&opts.forceDirs, "force-dirs", false, "Preserve directory structure when extracting")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior if target file exists: prompt|ignore|overwrite|rename")
 
