@@ -14,6 +14,12 @@ tresor encrypt --file e:\temp\meintresor.tre mongodump\ minio\
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
 
+**Options:**
+
+- `--remove`: Remove source files after successful encryption (useful for cleanup after creating the container)
+- `--if-exists`: Define behavior when target container already exists (see below)
+- `--on-conflict`: Define conflict handling during append operations (see below)
+
 If the target container already exists, use `--if-exists`:
 
 ```bash
@@ -46,6 +52,11 @@ tresor decrypt --file e:\temp\meintresor.tre
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
+
+**Options:**
+
+- `--remove`: Remove the container file after successful decryption (useful if you no longer need the encrypted file after extracting)
+- `--on-conflict`: Define behavior if files already exist during decrypt (see below)
 
 If files already exist during decrypt, use `--on-conflict` to define behavior:
 
