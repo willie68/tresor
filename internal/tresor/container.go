@@ -43,13 +43,14 @@ const (
 )
 
 type EncryptOptions struct {
-	Password       string
-	ContainerPath  string
-	Inputs         []string
-	RemoveSources  bool
-	IfExists       string
-	OnFileConflict FileConflictHandler
-	ProgressWriter io.Writer
+	Password         string
+	ContainerPath    string
+	Inputs           []string
+	RemoveSources    bool
+	IfExists         string
+	OnFileConflict   FileConflictHandler
+	ProgressWriter   io.Writer
+	MaxContainerSize int64 // Max size per container in bytes; 0 = no limit (single container)
 }
 
 type DecryptOptions struct {
@@ -115,17 +116,184 @@ type archiveIndex struct {
 }
 
 type archiveEntry struct {
-	Path       string  `json:"path"`
-	Mode       uint32  `json:"mode"`
-	Type       uint8   `json:"type"`
-	Size       int64   `json:"size"`
-	ModTime    int64   `json:"mod_time,omitempty"`
-	StoredSize int64   `json:"stored_size,omitempty"`
-	Compressed bool    `json:"compressed,omitempty"`
-	DataOffset uint64  `json:"data_offset,omitempty"`
-	DataLength uint64  `json:"data_length,omitempty"`
-	ChunkCount uint32  `json:"chunk_count,omitempty"`
-	NonceSeed  [8]byte `json:"nonce_seed,omitempty"`
+	Path           string  `json:"path"`
+	Mode           uint32  `json:"mode"`
+	Type           uint8   `json:"type"`
+	Size           int64   `json:"size"`
+	ModTime        int64   `json:"mod_time,omitempty"`
+	StoredSize     int64   `json:"stored_size,omitempty"`
+	Compressed     bool    `json:"compressed,omitempty"`
+	DataOffset     uint64  `json:"data_offset,omitempty"`
+	DataLength     uint64  `json:"data_length,omitempty"`
+	ChunkCount     uint32  `json:"chunk_count,omitempty"`
+	NonceSeed      [8]byte `json:"nonce_seed,omitempty"`
+	ContainerIndex uint32  `json:"container_index,omitempty"` // 0 = in main .tre, 1+ = in .000, .001, etc
+}
+
+// containerWriter manages writing payloads across multiple container files
+type containerWriter struct {
+	basePath        string              // e.g., "tresor.tre"
+	maxSize         int64               // Max payload size per container; 0 = unlimited
+	currentFile     *os.File            // Current container file handle
+	currentIndex    uint32              // 0 for main, 1+ for .000, .001, etc
+	currentSize     int64               // Bytes written to current container (after header)
+	firstDataOffset int64               // Offset of first payload in current container (after header)
+	files           map[uint32]*os.File // Map of open container files
+	tmpPaths        map[uint32]string   // Track .tmp paths
+}
+
+// newContainerWriter creates a writer for potentially multiple containers
+func newContainerWriter(basePath string, maxSize int64) *containerWriter {
+	return &containerWriter{
+		basePath:        basePath,
+		maxSize:         maxSize,
+		currentIndex:    0,
+		firstDataOffset: int64(headerSize),
+		files:           make(map[uint32]*os.File),
+		tmpPaths:        make(map[uint32]string),
+	}
+}
+
+// getPath returns the file path for a given container index
+func (cw *containerWriter) getPath(index uint32) string {
+	if index == 0 {
+		return cw.basePath + ".tmp"
+	}
+	return fmt.Sprintf("%s.%03d.tmp", cw.basePath, index-1)
+}
+
+// finalPath returns the final (non-tmp) file path
+func (cw *containerWriter) finalPath(index uint32) string {
+	if index == 0 {
+		return cw.basePath
+	}
+	return fmt.Sprintf("%s.%03d", cw.basePath, index-1)
+}
+
+// switchContainer closes current and opens next container if needed
+// Returns (shouldSwitch, error)
+func (cw *containerWriter) checkSwitchContainer(dataSize int64) (bool, error) {
+	if cw.maxSize <= 0 {
+		return false, nil // No limit, stay in current container
+	}
+
+	// Calculate size after writing this data
+	projectedSize := cw.currentSize + dataSize
+	if projectedSize <= cw.maxSize {
+		return false, nil // Fits in current container
+	}
+
+	// Need to switch to next container
+	return true, nil
+}
+
+// ensureContainerOpen creates/opens the current container file
+func (cw *containerWriter) ensureContainerOpen() (*os.File, error) {
+	if cw.currentFile != nil {
+		return cw.currentFile, nil
+	}
+
+	tmpPath := cw.getPath(cw.currentIndex)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("create container %d: %w", cw.currentIndex, err)
+	}
+
+	cw.currentFile = f
+	cw.tmpPaths[cw.currentIndex] = tmpPath
+	cw.files[cw.currentIndex] = f
+	cw.currentSize = 0
+	return f, nil
+}
+
+// switchToNextContainer closes current container and switches to next (but keeps it open)
+func (cw *containerWriter) switchToNextContainer(hdr containerHeader) error {
+	// Don't close the file - keep all containers open until finalize
+	// Just mark that we're moving to a new one
+	cw.currentIndex++
+	cw.currentFile = nil // Reset so ensureContainerOpen creates new file for this index
+	cw.currentSize = 0
+	cw.firstDataOffset = int64(headerSize)
+
+	// Open and write header to new container
+	f, err := cw.ensureContainerOpen()
+	if err != nil {
+		return err
+	}
+
+	if err := writeHeader(f, hdr); err != nil {
+		return fmt.Errorf("write header to container %d: %w", cw.currentIndex, err)
+	}
+
+	cw.currentSize = int64(headerSize)
+	return nil
+}
+
+// write appends data to current container
+func (cw *containerWriter) write(data []byte) error {
+	f, err := cw.ensureContainerOpen()
+	if err != nil {
+		return err
+	}
+
+	n, err := f.Write(data)
+	if err != nil {
+		return fmt.Errorf("write to container %d: %w", cw.currentIndex, err)
+	}
+
+	cw.currentSize += int64(n)
+	return nil
+}
+
+// seek returns current position in current container
+func (cw *containerWriter) seek(offset int64, whence int) (int64, error) {
+	f, err := cw.ensureContainerOpen()
+	if err != nil {
+		return 0, err
+	}
+	return f.Seek(offset, whence)
+}
+
+// getCurrentOffset returns the current write position in the current container
+func (cw *containerWriter) getCurrentOffset() (int64, error) {
+	f, err := cw.ensureContainerOpen()
+	if err != nil {
+		return 0, err
+	}
+	return f.Seek(0, io.SeekCurrent)
+}
+
+// close closes all container files
+func (cw *containerWriter) close() error {
+	var lastErr error
+	for _, f := range cw.files {
+		if f != nil {
+			if err := f.Close(); err != nil {
+				lastErr = err
+			}
+		}
+	}
+	return lastErr
+}
+
+// cleanup removes all temporary files
+func (cw *containerWriter) cleanup() {
+	for _, tmpPath := range cw.tmpPaths {
+		_ = os.Remove(tmpPath)
+	}
+}
+
+// finalize atomically renames all tmp files to final paths
+func (cw *containerWriter) finalize() error {
+	for idx, tmpPath := range cw.tmpPaths {
+		finalPath := cw.finalPath(idx)
+		// Remove any existing file first
+		_ = os.Remove(finalPath)
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			return fmt.Errorf("finalize container %d: %w", idx, err)
+		}
+	}
+	return nil
 }
 
 func Encrypt(opts EncryptOptions) error {
@@ -168,17 +336,7 @@ func encryptSync(opts EncryptOptions) error {
 		return err
 	}
 
-	tmpPath := opts.ContainerPath + ".tmp"
-	_ = os.Remove(tmpPath)
-
-	out, err := os.Create(tmpPath)
-	if err != nil {
-		return fmt.Errorf("create container: %w", err)
-	}
-	defer func() {
-		_ = out.Close()
-	}()
-
+	// Create container header once (shared across all containers)
 	hdr := containerHeader{
 		Magic:       headerMagic,
 		Version:     containerVersion,
@@ -190,14 +348,23 @@ func encryptSync(opts EncryptOptions) error {
 		return fmt.Errorf("generate salt: %w", err)
 	}
 
-	if err := writeHeader(out, hdr); err != nil {
-		return fmt.Errorf("write header: %w", err)
-	}
-
 	aead, err := buildAEAD(opts.Password, hdr)
 	if err != nil {
 		return err
 	}
+
+	cw := newContainerWriter(opts.ContainerPath, opts.MaxContainerSize)
+	defer cw.cleanup()
+
+	// Initialize first container (don't increment index, start at 0)
+	f, err := cw.ensureContainerOpen()
+	if err != nil {
+		return err
+	}
+	if err := writeHeader(f, hdr); err != nil {
+		return fmt.Errorf("write header: %w", err)
+	}
+	cw.currentSize = int64(headerSize)
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -210,22 +377,31 @@ func encryptSync(opts EncryptOptions) error {
 
 	for _, root := range roots {
 		progressf(opts.ProgressWriter, "encrypt: scanning root %q", root)
-		walkErr := encryptSyncWalkDir(root, cwd, out, aead, &index, seen, opts.ProgressWriter, &encryptedFiles)
+		walkErr := encryptSyncWalkDirMulti(root, cwd, cw, hdr, aead, &index, seen, opts.ProgressWriter, &encryptedFiles)
 		if walkErr != nil {
 			return walkErr
 		}
 	}
 
-	if err := writeContainerIndex(out, aead, index); err != nil {
+	// Write index to main container (never gets split)
+	mainFile := cw.files[0]
+	if mainFile == nil {
+		var err error
+		mainFile, err = cw.ensureContainerOpen()
+		if err != nil {
+			return err
+		}
+	}
+	if err := writeContainerIndex(mainFile, aead, index); err != nil {
 		return err
 	}
 
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("close container: %w", err)
+	if err := cw.close(); err != nil {
+		return fmt.Errorf("close containers: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, opts.ContainerPath); err != nil {
-		return fmt.Errorf("finalize container: %w", err)
+	if err := cw.finalize(); err != nil {
+		return err
 	}
 
 	if opts.RemoveSources {
@@ -324,6 +500,170 @@ func encryptSyncProcessFile(absPath, relPath string, info fs.FileInfo, out *os.F
 	})
 	*fileCount++
 	return nil
+}
+
+// encryptSyncWalkDirMulti walks directory tree for multi-container encryption
+func encryptSyncWalkDirMulti(root, cwd string, cw *containerWriter, hdr containerHeader, aead cipher.AEAD, index *archiveIndex, seen map[string]struct{}, pw io.Writer, fileCount *int) error {
+	return filepath.WalkDir(root, func(pathFs string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return encryptSyncProcessEntryMulti(pathFs, d, cwd, cw, hdr, aead, index, seen, pw, fileCount)
+	})
+}
+
+// encryptSyncProcessEntryMulti processes a single file/dir for multi-container encryption
+func encryptSyncProcessEntryMulti(pathFs string, d fs.DirEntry, cwd string, cw *containerWriter, hdr containerHeader, aead cipher.AEAD, index *archiveIndex, seen map[string]struct{}, pw io.Writer, fileCount *int) error {
+	absPath, err := filepath.Abs(pathFs)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := seen[absPath]; ok {
+		if d.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	seen[absPath] = struct{}{}
+
+	relPath, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		return fmt.Errorf("path %q is outside working directory", pathFs)
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	info, err := d.Info()
+	if err != nil {
+		return err
+	}
+
+	if d.IsDir() {
+		index.Entries = append(index.Entries, archiveEntry{Path: relPath, Mode: uint32(info.Mode().Perm()), Type: entryTypeDir, ModTime: info.ModTime().Unix()})
+		return nil
+	}
+
+	if !d.Type().IsRegular() {
+		return nil
+	}
+
+	return encryptSyncProcessFileMulti(absPath, relPath, info, cw, hdr, aead, index, pw, fileCount)
+}
+
+// encryptSyncProcessFileMulti encrypts a single file with multi-container support
+func encryptSyncProcessFileMulti(absPath, relPath string, info fs.FileInfo, cw *containerWriter, hdr containerHeader, aead cipher.AEAD, index *archiveIndex, pw io.Writer, fileCount *int) error {
+	progressf(pw, "encrypt: processing %s", relPath)
+
+	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Get info file to estimate encrypted size (worst case: no compression)
+	payloadInfo, err := os.Stat(payloadPath)
+	if err != nil {
+		return err
+	}
+	payloadSize := payloadInfo.Size()
+
+	// Estimate encrypted size: each chunk is (chunkSize + 16-byte AEAD tag)
+	estimatedEncryptedSize := ((payloadSize + int64(chunkSize) - 1) / int64(chunkSize)) * (int64(chunkSize) + 16)
+
+	// If this file doesn't fit in current container, switch to next
+	if cw.maxSize > 0 && cw.currentSize+estimatedEncryptedSize > cw.maxSize {
+		// Only switch if not empty, to avoid wasting containers
+		if cw.currentSize > int64(headerSize) {
+			if err := cw.switchToNextContainer(hdr); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Get current position before writing
+	offset, err := cw.getCurrentOffset()
+	if err != nil {
+		return err
+	}
+
+	// Encrypt file data (stays in current container)
+	dataLen, chunkCount, nonceSeed, err := encryptFileDataMulti(payloadPath, cw, hdr, aead)
+	if err != nil {
+		return err
+	}
+
+	index.Entries = append(index.Entries, archiveEntry{
+		Path:           relPath,
+		Mode:           uint32(info.Mode().Perm()),
+		Type:           entryTypeFile,
+		Size:           originalSize,
+		ModTime:        info.ModTime().Unix(),
+		StoredSize:     storedSize,
+		Compressed:     compressed,
+		DataOffset:     uint64(offset),
+		DataLength:     dataLen,
+		ChunkCount:     chunkCount,
+		NonceSeed:      nonceSeed,
+		ContainerIndex: cw.currentIndex,
+	})
+	*fileCount++
+	return nil
+}
+
+// encryptFileDataMulti writes encrypted file data to current container
+// File stays in current container - caller handles container switching
+func encryptFileDataMulti(sourcePath string, cw *containerWriter, hdr containerHeader, aead cipher.AEAD) (uint64, uint32, [8]byte, error) {
+	in, err := os.Open(sourcePath)
+	if err != nil {
+		return 0, 0, [8]byte{}, fmt.Errorf("open %q: %w", sourcePath, err)
+	}
+	defer func() {
+		_ = in.Close()
+	}()
+
+	var seed [8]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		return 0, 0, [8]byte{}, err
+	}
+
+	buf := make([]byte, chunkSize)
+	var chunkCount uint32
+	var totalCipher uint64
+
+	for {
+		n, readErr := io.ReadFull(in, buf)
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil && readErr != io.ErrUnexpectedEOF {
+			return 0, 0, [8]byte{}, fmt.Errorf("read %q: %w", sourcePath, readErr)
+		}
+
+		if n < int(chunkSize) {
+			for i := n; i < int(chunkSize); i++ {
+				buf[i] = 0
+			}
+		}
+
+		nonce := chunkNonce(seed, chunkCount)
+		ciphertext := aead.Seal(nil, nonce[:], buf, nil)
+
+		// Write chunk to current container
+		if err := cw.write(ciphertext); err != nil {
+			return 0, 0, [8]byte{}, err
+		}
+		totalCipher += uint64(len(ciphertext))
+		chunkCount++
+
+		if readErr == io.ErrUnexpectedEOF {
+			break
+		}
+	}
+
+	return totalCipher, chunkCount, seed, nil
 }
 
 func encryptAppend(opts EncryptOptions) error {
@@ -580,48 +920,22 @@ func encryptAppendProcessFile(absPath, relPath string, info fs.FileInfo, out *os
 }
 
 func readContainerIndex(containerPath, password string) (containerHeader, archiveIndex, containerFooter, error) {
-	in, err := os.Open(containerPath)
+	cr, err := newContainerReader(containerPath)
 	if err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, fmt.Errorf("open container: %w", err)
+		return containerHeader{}, archiveIndex{}, containerFooter{}, err
 	}
-	defer func() {
-		_ = in.Close()
-	}()
+	defer cr.close()
 
-	hdr, err := readHeader(in)
-	if err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, err
-	}
-	aead, err := buildAEAD(password, hdr)
-	if err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, err
-	}
-	footer, err := readFooter(in)
+	hdr, index, err := cr.readIndex(password)
 	if err != nil {
 		return containerHeader{}, archiveIndex{}, containerFooter{}, err
 	}
 
-	if _, err := in.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, fmt.Errorf("seek index: %w", err)
-	}
-	indexCipher := make([]byte, footer.IndexLength)
-	if _, err := io.ReadFull(in, indexCipher); err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, fmt.Errorf("read index ciphertext: %w", err)
-	}
-	indexPlain, err := aead.Open(nil, footer.IndexNonce[:], indexCipher, nil)
+	// Read footer from main container to return it
+	mainFile := cr.files[0]
+	footer, err := readFooter(mainFile)
 	if err != nil {
-		if isAuthFailure(err) {
-			return containerHeader{}, archiveIndex{}, containerFooter{}, errors.New("invalid password or corrupted container")
-		}
-		return containerHeader{}, archiveIndex{}, containerFooter{}, fmt.Errorf("decrypt index: %w", err)
-	}
-
-	var index archiveIndex
-	if err := json.Unmarshal(indexPlain, &index); err != nil {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, fmt.Errorf("unmarshal index: %w", err)
-	}
-	if index.ChunkSize == 0 {
-		return containerHeader{}, archiveIndex{}, containerFooter{}, errors.New("invalid chunk size in index")
+		return containerHeader{}, archiveIndex{}, containerFooter{}, err
 	}
 
 	return hdr, index, footer, nil
@@ -687,53 +1001,21 @@ func Decrypt(opts DecryptOptions) error {
 
 	progressf(opts.ProgressWriter, "decrypt: container=%q", opts.ContainerPath)
 
-	in, err := os.Open(opts.ContainerPath)
-	if err != nil {
-		return fmt.Errorf("open container: %w", err)
-	}
-	containerOpen := true
-	defer func() {
-		if containerOpen {
-			_ = in.Close()
-		}
-	}()
-
-	hdr, err := readHeader(in)
+	// Create container reader for multi-container support
+	cr, err := newContainerReader(opts.ContainerPath)
 	if err != nil {
 		return err
 	}
+	defer cr.close()
+
+	hdr, index, err := cr.readIndex(opts.Password)
+	if err != nil {
+		return err
+	}
+
 	aead, err := buildAEAD(opts.Password, hdr)
 	if err != nil {
 		return err
-	}
-
-	footer, err := readFooter(in)
-	if err != nil {
-		return err
-	}
-
-	if _, err := in.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
-		return fmt.Errorf("seek index: %w", err)
-	}
-	indexCipher := make([]byte, footer.IndexLength)
-	if _, err := io.ReadFull(in, indexCipher); err != nil {
-		return fmt.Errorf("read index ciphertext: %w", err)
-	}
-
-	indexPlain, err := aead.Open(nil, footer.IndexNonce[:], indexCipher, nil)
-	if err != nil {
-		if isAuthFailure(err) {
-			return errors.New("invalid password or corrupted container")
-		}
-		return fmt.Errorf("decrypt index: %w", err)
-	}
-
-	var index archiveIndex
-	if err := json.Unmarshal(indexPlain, &index); err != nil {
-		return fmt.Errorf("unmarshal index: %w", err)
-	}
-	if index.ChunkSize == 0 {
-		return errors.New("invalid chunk size in index")
 	}
 
 	if opts.OnFileConflict == nil {
@@ -746,20 +1028,29 @@ func Decrypt(opts DecryptOptions) error {
 	}{}
 
 	for _, entry := range index.Entries {
-		err := decryptProcessEntry(in, aead, index.ChunkSize, entry, opts.OnFileConflict, opts.ProgressWriter, &stats)
+		err := decryptProcessEntry(cr, aead, index.ChunkSize, entry, opts.OnFileConflict, opts.ProgressWriter, &stats)
 		if err != nil {
 			return err
 		}
 	}
 
-	if err := in.Close(); err != nil {
-		return fmt.Errorf("close container file: %w", err)
-	}
-	containerOpen = false
+	cr.close()
 
 	if opts.RemoveContainer {
+		// Remove all container files
 		if err := os.Remove(opts.ContainerPath); err != nil {
 			return fmt.Errorf("remove container file: %w", err)
+		}
+		// Remove sidecar containers
+		for i := 0; ; i++ {
+			sidecarPath := fmt.Sprintf("%s.%03d", opts.ContainerPath, i)
+			if err := os.Remove(sidecarPath); err != nil {
+				// If file doesn't exist, we're done with sidecars
+				if errors.Is(err, os.ErrNotExist) {
+					break
+				}
+				return fmt.Errorf("remove sidecar %s: %w", sidecarPath, err)
+			}
 		}
 	}
 
@@ -768,7 +1059,164 @@ func Decrypt(opts DecryptOptions) error {
 	return nil
 }
 
-func decryptProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
+// containerReader manages reading payloads from multiple container files
+type containerReader struct {
+	basePath string              // e.g., "tresor.tre"
+	files    map[uint32]*os.File // Open container files by index (0 = main, 1+ = .000, .001, etc)
+	headers  map[uint32]containerHeader
+	mainHdr  containerHeader
+}
+
+// newContainerReader opens all available container files for reading
+func newContainerReader(basePath string) (*containerReader, error) {
+	cr := &containerReader{
+		basePath: basePath,
+		files:    make(map[uint32]*os.File),
+		headers:  make(map[uint32]containerHeader),
+	}
+
+	// Open main container (index 0)
+	mainFile, err := os.Open(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("open main container: %w", err)
+	}
+	hdr, err := readHeader(mainFile)
+	if err != nil {
+		_ = mainFile.Close()
+		return nil, err
+	}
+	cr.mainHdr = hdr
+	cr.files[0] = mainFile
+	cr.headers[0] = hdr
+
+	// Try to open sidecar containers (index 1+)
+	for i := 0; i < 1000; i++ { // Reasonable upper limit
+		sidecarPath := fmt.Sprintf("%s.%03d", basePath, i)
+		sidecarFile, err := os.Open(sidecarPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// No more sidecar containers
+				break
+			}
+			// Other error - cleanup and return
+			cr.close()
+			return nil, fmt.Errorf("open sidecar container %d: %w", i+1, err)
+		}
+
+		hdr, err := readHeader(sidecarFile)
+		if err != nil {
+			sidecarFile.Close()
+			cr.close()
+			return nil, fmt.Errorf("read header of sidecar %d: %w", i+1, err)
+		}
+
+		cr.files[uint32(i+1)] = sidecarFile
+		cr.headers[uint32(i+1)] = hdr
+	}
+
+	return cr, nil
+}
+
+// readIndex reads and decrypts the index from main container
+func (cr *containerReader) readIndex(password string) (containerHeader, archiveIndex, error) {
+	mainFile := cr.files[0]
+	if mainFile == nil {
+		return containerHeader{}, archiveIndex{}, errors.New("main container not open")
+	}
+
+	// Build AEAD with main container header
+	aead, err := buildAEAD(password, cr.mainHdr)
+	if err != nil {
+		return containerHeader{}, archiveIndex{}, err
+	}
+
+	// Read footer (always at end of main container)
+	if _, err := mainFile.Seek(0, io.SeekEnd); err != nil {
+		return containerHeader{}, archiveIndex{}, err
+	}
+	fileSize, err := mainFile.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return containerHeader{}, archiveIndex{}, err
+	}
+
+	if _, err := mainFile.Seek(-footerSize, io.SeekEnd); err != nil {
+		return containerHeader{}, archiveIndex{}, fmt.Errorf("seek footer: %w", err)
+	}
+
+	footer, err := readFooter(mainFile)
+	if err != nil {
+		return containerHeader{}, archiveIndex{}, err
+	}
+
+	// Validate index bounds
+	if footer.IndexOffset < uint64(headerSize) || footer.IndexOffset+footer.IndexLength > uint64(fileSize) {
+		return containerHeader{}, archiveIndex{}, errors.New("invalid index bounds in footer")
+	}
+
+	// Read and decrypt index
+	if _, err := mainFile.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
+		return containerHeader{}, archiveIndex{}, err
+	}
+
+	indexCipher := make([]byte, footer.IndexLength)
+	if _, err := io.ReadFull(mainFile, indexCipher); err != nil {
+		return containerHeader{}, archiveIndex{}, fmt.Errorf("read index ciphertext: %w", err)
+	}
+
+	indexPlain, err := aead.Open(nil, footer.IndexNonce[:], indexCipher, nil)
+	if err != nil {
+		if isAuthFailure(err) {
+			return containerHeader{}, archiveIndex{}, errors.New("invalid password or corrupted container")
+		}
+		return containerHeader{}, archiveIndex{}, fmt.Errorf("decrypt index: %w", err)
+	}
+
+	var index archiveIndex
+	if err := json.Unmarshal(indexPlain, &index); err != nil {
+		return containerHeader{}, archiveIndex{}, fmt.Errorf("unmarshal index: %w", err)
+	}
+
+	if index.ChunkSize == 0 {
+		return containerHeader{}, archiveIndex{}, errors.New("invalid chunk size in index")
+	}
+
+	return cr.mainHdr, index, nil
+}
+
+// getContainerFile returns the file handle for a given container index, or error if not available
+func (cr *containerReader) getContainerFile(containerIndex uint32) (*os.File, error) {
+	f := cr.files[containerIndex]
+	if f == nil {
+		return nil, fmt.Errorf("container %d not available", containerIndex)
+	}
+	return f, nil
+}
+
+// seekAndRead seeks to offset in specified container and reads data
+func (cr *containerReader) seekAndRead(containerIndex uint32, offset int64, data []byte) error {
+	f, err := cr.getContainerFile(containerIndex)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek in container %d: %w", containerIndex, err)
+	}
+	if _, err := io.ReadFull(f, data); err != nil {
+		return fmt.Errorf("read from container %d: %w", containerIndex, err)
+	}
+	return nil
+}
+
+// close closes all container files
+func (cr *containerReader) close() {
+	for _, f := range cr.files {
+		if f != nil {
+			_ = f.Close()
+		}
+	}
+}
+
+func decryptProcessEntry(cr *containerReader, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
 	decrypted int
 	skipped   int
 }) error {
@@ -792,7 +1240,7 @@ func decryptProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry 
 			return nil
 		}
 		progressf(pw, "decrypt: restoring %s", resolvedTarget)
-		if err := decryptFileEntry(in, aead, chunkSize, resolvedTarget, entry); err != nil {
+		if err := decryptFileEntry(cr, aead, chunkSize, resolvedTarget, entry); err != nil {
 			return err
 		}
 		stats.decrypted++
@@ -847,53 +1295,21 @@ func Extract(opts ExtractOptions) error {
 
 	progressf(opts.ProgressWriter, "extract: container=%q path=%q force-dirs=%v", opts.ContainerPath, opts.ExtractPath, opts.ForceDirs)
 
-	in, err := os.Open(opts.ContainerPath)
-	if err != nil {
-		return fmt.Errorf("open container: %w", err)
-	}
-	containerOpen := true
-	defer func() {
-		if containerOpen {
-			_ = in.Close()
-		}
-	}()
-
-	hdr, err := readHeader(in)
+	// Create container reader for multi-container support
+	cr, err := newContainerReader(opts.ContainerPath)
 	if err != nil {
 		return err
 	}
+	defer cr.close()
+
+	hdr, index, err := cr.readIndex(opts.Password)
+	if err != nil {
+		return err
+	}
+
 	aead, err := buildAEAD(opts.Password, hdr)
 	if err != nil {
 		return err
-	}
-
-	footer, err := readFooter(in)
-	if err != nil {
-		return err
-	}
-
-	if _, err := in.Seek(int64(footer.IndexOffset), io.SeekStart); err != nil {
-		return fmt.Errorf("seek index: %w", err)
-	}
-	indexCipher := make([]byte, footer.IndexLength)
-	if _, err := io.ReadFull(in, indexCipher); err != nil {
-		return fmt.Errorf("read index ciphertext: %w", err)
-	}
-
-	indexPlain, err := aead.Open(nil, footer.IndexNonce[:], indexCipher, nil)
-	if err != nil {
-		if isAuthFailure(err) {
-			return errors.New("invalid password or corrupted container")
-		}
-		return fmt.Errorf("decrypt index: %w", err)
-	}
-
-	var index archiveIndex
-	if err := json.Unmarshal(indexPlain, &index); err != nil {
-		return fmt.Errorf("unmarshal index: %w", err)
-	}
-	if index.ChunkSize == 0 {
-		return errors.New("invalid chunk size in index")
 	}
 
 	// Normalize extract path (convert to forward slashes)
@@ -926,23 +1342,20 @@ func Extract(opts ExtractOptions) error {
 	}{}
 
 	for _, entry := range matchingEntries {
-		err := extractProcessEntry(in, aead, index.ChunkSize, entry, extractPath, isSingleFile, opts.ForceDirs, opts.OnFileConflict, opts.ProgressWriter, &stats)
+		err := extractProcessEntry(cr, aead, index.ChunkSize, entry, extractPath, isSingleFile, opts.ForceDirs, opts.OnFileConflict, opts.ProgressWriter, &stats)
 		if err != nil {
 			return err
 		}
 	}
 
-	if err := in.Close(); err != nil {
-		return fmt.Errorf("close container file: %w", err)
-	}
-	containerOpen = false
+	cr.close()
 
 	progressf(opts.ProgressWriter, "extract: done (extracted=%d skipped=%d)", stats.extracted, stats.skipped)
 
 	return nil
 }
 
-func extractProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, extractPath string, isSingleFile, forceDirs bool, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
+func extractProcessEntry(cr *containerReader, aead cipher.AEAD, chunkSize uint32, entry archiveEntry, extractPath string, isSingleFile, forceDirs bool, conflictHandler FileConflictHandler, pw io.Writer, stats *struct {
 	extracted int
 	skipped   int
 }) error {
@@ -1002,7 +1415,7 @@ func extractProcessEntry(in *os.File, aead cipher.AEAD, chunkSize uint32, entry 
 	}
 
 	progressf(pw, "extract: extracting %s", resolvedTarget)
-	if err := decryptFileEntry(in, aead, chunkSize, resolvedTarget, entry); err != nil {
+	if err := decryptFileEntry(cr, aead, chunkSize, resolvedTarget, entry); err != nil {
 		return err
 	}
 	stats.extracted++
@@ -1197,7 +1610,7 @@ func encryptFileData(out *os.File, sourcePath string, aead cipher.AEAD) (uint64,
 	return totalCipher, chunkCount, seed, nil
 }
 
-func decryptFileEntry(in *os.File, aead cipher.AEAD, chunkSizeFromIndex uint32, target string, entry archiveEntry) error {
+func decryptFileEntry(cr *containerReader, aead cipher.AEAD, chunkSizeFromIndex uint32, target string, entry archiveEntry) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create parent directory for %q: %w", target, err)
 	}
@@ -1218,7 +1631,13 @@ func decryptFileEntry(in *os.File, aead cipher.AEAD, chunkSizeFromIndex uint32, 
 		_ = out.Close()
 	}()
 
-	if _, err := in.Seek(int64(entry.DataOffset), io.SeekStart); err != nil {
+	// Get the correct container file for this entry
+	containerFile, err := cr.getContainerFile(entry.ContainerIndex)
+	if err != nil {
+		return fmt.Errorf("get container for %q: %w", target, err)
+	}
+
+	if _, err := containerFile.Seek(int64(entry.DataOffset), io.SeekStart); err != nil {
 		return fmt.Errorf("seek data for %q: %w", target, err)
 	}
 
@@ -1242,7 +1661,7 @@ func decryptFileEntry(in *os.File, aead cipher.AEAD, chunkSizeFromIndex uint32, 
 	}
 
 	for i := uint32(0); i < entry.ChunkCount; i++ {
-		if _, err := io.ReadFull(in, cipherChunk); err != nil {
+		if _, err := io.ReadFull(containerFile, cipherChunk); err != nil {
 			return fmt.Errorf("read encrypted chunk %d for %q: %w", i, target, err)
 		}
 		nonce := chunkNonce(entry.NonceSeed, i)

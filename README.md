@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.10.0`
+Current release: `v0.11.0`
 
 ## Commands
 
@@ -42,6 +42,47 @@ For automated scenarios with password:
 
 ```bash
 tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
+```
+
+#### Multi-Container Encryption
+
+For large archives, you can split data across multiple container files using `--max-size`:
+
+```bash
+tresor encrypt --max-size 100 --remove mongodump\ minio\
+tresor encrypt --file archive.tre --max-size 500 mongodump\
+```
+
+**How it works:**
+
+- `--max-size`: Maximum target size for each container file in MB (default: 0 = unlimited, all data in single file)
+- When specified, creates a main container (`archive.tre`) plus sidecar files (`archive.tre.000`, `archive.tre.001`, etc.)
+- Each complete file is written to a single container - **files never split across containers**
+- Container switching happens between files: if the next file won't fit, encrypt switches to a new container
+- **Important:** Individual files larger than `--max-size` are always written completely to their container (containers may exceed the size limit to keep files intact)
+- The index is always stored in the main container file only
+
+**Example with --max-size 100 (MB):**
+
+```
+file1.bin (80 MB) → Container 0 (main)        [80 MB]
+file2.bin (80 MB) → Container 1 (.000)        [80 MB] 
+file3.bin (30 MB) → Container 1 (.000)        [110 MB - exceeds limit but keeps file intact]
+file4.bin (50 MB) → Container 2 (.001)        [50 MB]
+```
+
+**Benefits:**
+
+- Store large archives on size-limited media (USB drives, cloud storage with file limits)
+- Easier transport of very large encrypted data
+- Container files are independent and can be lost without affecting main file integrity
+
+**Decryption:**
+
+Multi-container archives decrypt transparently - just point to the main `.tre` file and all sidecar containers are automatically detected and read:
+
+```bash
+tresor decrypt --file archive.tre    # Automatically reads archive.tre.000, archive.tre.001, etc.
 ```
 
 ### Decrypt

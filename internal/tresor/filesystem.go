@@ -21,16 +21,16 @@ import (
 
 // readOnlyFS provides a FUSE filesystem interface for decrypting and serving tresor files
 type readOnlyFS struct {
-	containerPath string
-	password      string
-	index         archiveIndex
-	aead          cipher.AEAD
-	containerFile *os.File
-	chunkSize     uint32
-	totalSize     uint64     // Total size of all files
-	volumeLabel   string     // Volume label (container name without extension)
-	mu            sync.Mutex // Protects containerFile reads
-	cache         *FileCache // Optional cache for decrypted file data
+	containerPath   string
+	password        string
+	index           archiveIndex
+	aead            cipher.AEAD
+	containerReader *containerReader
+	chunkSize       uint32
+	totalSize       uint64     // Total size of all files
+	volumeLabel     string     // Volume label (container name without extension)
+	mu              sync.Mutex // Protects containerReader reads
+	cache           *FileCache // Optional cache for decrypted file data
 }
 
 // NewReadOnlyFS creates a new read-only filesystem for a tresor container
@@ -102,10 +102,8 @@ func NewReadOnlyFS(containerPath, password string, cacheSize int64) (*readOnlyFS
 	var totalSize uint64
 	for _, entry := range fs.index.Entries {
 		if entry.Type == entryTypeFile { // Regular file
-			if entry.Size <= 0 && entry.StoredSize <= 0 {
-				return nil, fmt.Errorf("entry %q has no valid size", entry.Path)
-			}
-			if entry.ChunkCount == 0 && entry.Size > 0 {
+			// Files with size > 0 must have chunks
+			if entry.Size > 0 && entry.ChunkCount == 0 {
 				return nil, fmt.Errorf("entry %q has size but no chunks", entry.Path)
 			}
 			if entry.Compressed && entry.Size > 0 {
@@ -132,19 +130,20 @@ func NewReadOnlyFS(containerPath, password string, cacheSize int64) (*readOnlyFS
 	}
 	fs.volumeLabel = containerName
 
-	// Open container file for later reading
-	fs.containerFile, err = os.Open(containerPath)
+	// Create container reader for multi-container support
+	cr, err := newContainerReader(containerPath)
 	if err != nil {
-		return nil, fmt.Errorf("open container for reading: %w", err)
+		return nil, fmt.Errorf("open containers: %w", err)
 	}
+	fs.containerReader = cr
 
 	return fs, nil
 }
 
 // Close closes the filesystem
 func (fs *readOnlyFS) Close() error {
-	if fs.containerFile != nil {
-		return fs.containerFile.Close()
+	if fs.containerReader != nil {
+		fs.containerReader.close()
 	}
 	return nil
 }
@@ -511,8 +510,8 @@ func (fs *readOnlyFS) getDirectoryChildren(path string) []*archiveEntry {
 }
 
 func (fs *readOnlyFS) readDecryptedFileData(entry *archiveEntry, offset, length int64) ([]byte, error) {
-	if fs.containerFile == nil {
-		return nil, errors.New("container file not open")
+	if fs.containerReader == nil {
+		return nil, errors.New("container reader not open")
 	}
 
 	if offset < 0 || length < 0 {
@@ -640,24 +639,19 @@ func (fs *readOnlyFS) getChunks(entry *archiveEntry) ([][]byte, error) {
 	cipherChunks := make([][]byte, 0, entry.ChunkCount)
 
 	fs.mu.Lock()
-	_, err := fs.containerFile.Seek(int64(entry.DataOffset), io.SeekStart)
-	if err != nil {
-		fs.mu.Unlock()
-		return nil, fmt.Errorf("seek data: %w", err)
-	}
+	defer fs.mu.Unlock()
 
+	// Use containerReader to handle multi-container reads
 	for i := uint32(0); i < entry.ChunkCount; i++ {
-		_, readErr := io.ReadFull(fs.containerFile, cipherChunk)
-		if readErr != nil {
-			fs.mu.Unlock()
-			return nil, fmt.Errorf("read encrypted chunk %d: %w", i, readErr)
+		err := fs.containerReader.seekAndRead(entry.ContainerIndex, int64(entry.DataOffset)+int64(i)*int64(encChunkSize), cipherChunk)
+		if err != nil {
+			return nil, fmt.Errorf("read encrypted chunk %d: %w", i, err)
 		}
 		// Copy chunk to avoid issues with reusing buffer
 		chunk := make([]byte, len(cipherChunk))
 		copy(chunk, cipherChunk)
 		cipherChunks = append(cipherChunks, chunk)
 	}
-	fs.mu.Unlock()
 	return cipherChunks, nil
 }
 
