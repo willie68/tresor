@@ -1117,10 +1117,18 @@ func TestMatchesFilter(t *testing.T) {
 		{"photo.JPG", ".jpg", true},
 		{"document.pdf", ".jpg", false},
 
-		// Wildcard filter
+		// Wildcard filter with asterisk
 		{"photo.jpg", "*.jpg", true},
 		{"image.JPG", "*.jpg", true},
 		{"document.pdf", "*.jpg", false},
+
+		// Generic wildcard patterns (new)
+		{"replace_0000.jpg", "rep*", true},
+		{"replace_0000.jpg", "rep*.jpg", true},
+		{"report.pdf", "rep*.pdf", true},
+		{"report_2024.txt", "rep*", true},
+		{"data_report.txt", "rep*", false},
+		{"file_replacement.jpg", "rep*", false}, // Must start with rep, not contain it
 
 		// Substring filter
 		{"input/config.ini", "input", true},

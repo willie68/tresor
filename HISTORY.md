@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.13.0 (2026-07-16)
+- **Enhanced Wildcard Filter Support**
+  - Extended filter patterns to support generic glob wildcards (e.g., `rep*`, `file*.txt`)
+  - Wildcard patterns now use filepath.Match() for standard glob matching
+  - Examples: `tresor list --filter "rep*"` finds `replace_0000.jpg`, `report.pdf`, etc.
+  - Wildcard patterns match against filename only (not full path)
+
 ## v0.12.0 (2026-07-15)
 - **Filter Support for List Command**
   - Added `-filter` flag for listing container contents with pattern matching

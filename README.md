@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.12.0`
+Current release: `v0.13.0`
 
 ## Commands
 
@@ -125,6 +125,7 @@ Default is `--on-conflict prompt`.
 tresor list
 tresor list --file e:\temp\meintresor.tre
 tresor list --filter ".jpg"              # All JPG files (case-insensitive)
+tresor list --filter "rep*"              # Files starting with 'rep' (glob pattern)
 tresor list --filter "input/"            # Files in input directory and subdirectories
 tresor list --filter "/input/"           # Files directly in root input directory
 ```
@@ -135,6 +136,8 @@ tresor list --filter "/input/"           # Files directly in root input director
 |---------|---------|----------|
 | `.jpg` | Files with extension `.jpg` | `photo.jpg`, `image.JPG`, `pic.jPg` |
 | `*.jpg` | Files ending with `.jpg` (wildcard) | `photo.jpg`, `image.JPG` |
+| `rep*` | Files matching glob pattern | `replace_0000.jpg`, `report.pdf`, `report_2024.txt` |
+| `file*.txt` | Glob pattern with prefix and suffix | `file001.txt`, `file_backup.txt` |
 | `input` | Files containing "input" anywhere | `input`, `input/file.txt`, `my_input_file.pdf` |
 | `input/` | Files in directory (including subdirs) | `input/config.ini`, `input/nested/file.txt` |
 | `/input/` | Files directly in root directory only | `input/config.ini`, but NOT `input/nested/file.txt` |

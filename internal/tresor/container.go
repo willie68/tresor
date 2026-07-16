@@ -1254,7 +1254,7 @@ func decryptProcessEntry(cr *containerReader, aead cipher.AEAD, chunkSize uint32
 // matchesFilter checks if a file path matches the given filter pattern.
 // Filter types:
 // - ".jpg" or ".JPG" etc: matches files with extension .jpg (case insensitive)
-// - "*.jpg": matches files ending with .jpg (wildcard)
+// - "*.jpg" or "rep*": matches files with wildcard pattern (glob syntax)
 // - "input": matches files containing "input" anywhere in path (case insensitive)
 // - "input\\": matches files in directory "input\\" (subdirs of input)
 // - "\\input\\": matches files directly in root directory "input\\"
@@ -1276,10 +1276,12 @@ func matchesFilter(path string, filter string) bool {
 		return strings.HasSuffix(lowerPath, lowerFilter)
 	}
 
-	// Case 2: Wildcard pattern (e.g., "*.jpg")
-	if strings.HasPrefix(lowerFilter, "*." ) {
-		ext := strings.TrimPrefix(lowerFilter, "*")
-		return strings.HasSuffix(lowerPath, ext)
+	// Case 2: Wildcard pattern (e.g., "*.jpg", "rep*", "file*.txt")
+	if strings.Contains(lowerFilter, "*") && !strings.Contains(lowerFilter, "/") {
+		// Match against the filename only for patterns without path separator
+		filename := filepath.Base(lowerPath)
+		ok, err := filepath.Match(lowerFilter, filename)
+		return err == nil && ok
 	}
 
 	// Case 3: Root directory (e.g., "\input\\" or "/input/")

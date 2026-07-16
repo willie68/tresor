@@ -60,7 +60,7 @@ func newListCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for listing")
 	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Source container file path (.tre); defaults to tresor.tre")
-	cmd.Flags().StringVar(&opts.filter, "filter", "", "Filter pattern: .jpg (extension), *.jpg (wildcard), input (substring), input\\ (directory), \\input\\ (root dir), file.pdf (exact name)")
+	cmd.Flags().StringVar(&opts.filter, "filter", "", "Filter pattern: .jpg (extension), *.jpg or rep* (wildcard), input (substring), input\\ (directory), \\input\\ (root dir), file.pdf (exact name)")
 
 	return cmd
 }
