@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/spf13/cobra v1.10.2
-	github.com/willie68/gowillie68 v0.0.0-00010101000000-000000000000
+	github.com/willie68/gowillie68 v0.0.0-20260719080526-0f40fa7baac9
 	github.com/winfsp/cgofuse v1.6.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/term v0.44.0
@@ -22,5 +22,3 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
-
-replace github.com/willie68/gowillie68 => ../gowillie68
