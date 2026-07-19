@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie68/gowillie68/pkg/fileutils"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -47,6 +48,7 @@ type EncryptOptions struct {
 	ContainerPath    string
 	Inputs           []string
 	RemoveSources    bool
+	SecureRemove     bool // Use Gutmann method with 3 passes for secure deletion
 	IfExists         string
 	OnFileConflict   FileConflictHandler
 	ProgressWriter   io.Writer
@@ -321,6 +323,26 @@ func Encrypt(opts EncryptOptions) error {
 	return encryptAppend(opts)
 }
 
+// removeSources securely removes the source paths based on encryption options
+func removeSources(opts EncryptOptions, roots []string) error {
+	if !opts.RemoveSources {
+		return nil
+	}
+
+	for _, root := range roots {
+		var removeErr error
+		if opts.SecureRemove {
+			removeErr = fileutils.SecureRemoveAll(root, fileutils.WithQuickMode(false), fileutils.WithPasses(3))
+		} else {
+			removeErr = fileutils.SecureRemoveAll(root, fileutils.WithQuickMode(true))
+		}
+		if removeErr != nil {
+			return fmt.Errorf("remove source %q: %w", root, removeErr)
+		}
+	}
+	return nil
+}
+
 func encryptSync(opts EncryptOptions) error {
 	if opts.Password == "" {
 		return errors.New("password is required")
@@ -405,12 +427,8 @@ func encryptSync(opts EncryptOptions) error {
 		return err
 	}
 
-	if opts.RemoveSources {
-		for _, root := range roots {
-			if err := os.RemoveAll(root); err != nil {
-				return fmt.Errorf("remove source %q: %w", root, err)
-			}
-		}
+	if err := removeSources(opts, roots); err != nil {
+		return err
 	}
 
 	progressf(opts.ProgressWriter, "encrypt: done (%d files)", encryptedFiles)
@@ -755,12 +773,8 @@ func encryptAppend(opts EncryptOptions) error {
 		return fmt.Errorf("finalize container: %w", err)
 	}
 
-	if opts.RemoveSources {
-		for _, root := range roots {
-			if err := os.RemoveAll(root); err != nil {
-				return fmt.Errorf("remove source %q: %w", root, err)
-			}
-		}
+	if err := removeSources(opts, roots); err != nil {
+		return err
 	}
 
 	progressf(opts.ProgressWriter, "encrypt append: done (added=%d replaced=%d ignored=%d)", stats.added, stats.replaced, stats.ignored)

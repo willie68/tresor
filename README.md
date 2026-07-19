@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.13.0`
+Current release: `v0.14.0`
 
 ## Commands
 
@@ -26,6 +26,7 @@ If `--file` is omitted, `tresor.tre` in the current directory is used.
 **Options:**
 
 - `-r, --remove`: Remove source files after successful encryption (useful for cleanup after creating the container)
+- `--secure-remove`: Use Gutmann method (3 passes) for secure deletion; requires `--remove` flag
 - `--if-exists`: Define behavior when target container already exists (see below)
 - `--on-conflict`: Define conflict handling during append operations (see below)
 
@@ -52,6 +53,7 @@ For automated scenarios with password:
 ```bash
 tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
 tresor encrypt -p <mein-passwort> -r mongodump\ minio\  # Using short flags
+tresor encrypt --password <mein-passwort> --remove --secure-remove mongodump\ minio\  # Secure deletion
 ```
 
 #### Multi-Container Encryption

@@ -10,12 +10,13 @@ import (
 )
 
 type encryptOptions struct {
-	password string
-	remove   bool
-	file     string
-	ifExists string
-	conflict string
-	maxSize  int64
+	password     string
+	remove       bool
+	secureRemove bool
+	file         string
+	ifExists     string
+	conflict     string
+	maxSize      int64
 }
 
 func newEncryptCmd() *cobra.Command {
@@ -50,6 +51,7 @@ func newEncryptCmd() *cobra.Command {
 				ContainerPath:    containerPath,
 				Inputs:           args,
 				RemoveSources:    opts.remove,
+				SecureRemove:     opts.secureRemove,
 				IfExists:         opts.ifExists,
 				OnFileConflict:   handler,
 				MaxContainerSize: maxSizeBytes,
@@ -61,7 +63,11 @@ func newEncryptCmd() *cobra.Command {
 
 			fmt.Printf("encrypted %d input path(s) into %q\n", len(args), containerPath)
 			if opts.remove {
-				fmt.Println("source paths were removed after successful encryption")
+				if opts.secureRemove {
+					fmt.Println("source paths were securely removed (Gutmann method, 3 passes)")
+				} else {
+					fmt.Println("source paths were removed after successful encryption")
+				}
 			}
 			return nil
 		},
@@ -69,6 +75,7 @@ func newEncryptCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for encryption")
 	cmd.Flags().BoolVarP(&opts.remove, "remove", "r", false, "Remove source paths after successful encryption")
+	cmd.Flags().BoolVar(&opts.secureRemove, "secure-remove", false, "Use Gutmann method (3 passes) for secure deletion; requires --remove")
 	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Target container file path (.tre); defaults to tresor.tre")
 	cmd.Flags().StringVar(&opts.ifExists, "if-exists", "sync", "Behavior if target container exists: sync|append")
 	cmd.Flags().StringVar(&opts.conflict, "on-conflict", "prompt", "Conflict behavior in append mode: prompt|ignore|overwrite|rename")
