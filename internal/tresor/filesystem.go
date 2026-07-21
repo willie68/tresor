@@ -420,8 +420,8 @@ func (fs *readOnlyFS) Access(path string, mask uint32) int {
 // Helper functions
 
 func normalizePath(path string) string {
-	path = strings.TrimPrefix(path, "/")
-	path = strings.TrimSuffix(path, "/")
+	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.Trim(path, "/")
 	return path
 }
 
