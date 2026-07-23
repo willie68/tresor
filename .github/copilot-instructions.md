@@ -1,6 +1,6 @@
 # Copilot Instructions - tresor
 
-These instructions apply to all work in this repository.
+These instructions apply to all work in this repository. You are working on a windows system.
 
 ## Caveman Mode (ACTIVE)
 

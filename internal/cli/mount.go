@@ -46,38 +46,20 @@ func newMountCmd() *cobra.Command {
 			}
 
 			containerPath := ensureTreeExtension(opts.file)
+			volumeLabel := getVolumeLabel(containerPath)
 
 			// Convert cache size from MB to bytes
 			cacheSizeBytes := opts.cacheSize * 1024 * 1024
-
-			// Extract volume label from container filename (without extension)
-			volumeLabel := filepath.Base(containerPath)
-			if strings.HasSuffix(strings.ToLower(volumeLabel), ".tre") {
-				volumeLabel = volumeLabel[:len(volumeLabel)-4]
-			}
-			// Truncate to 32 chars max for Windows compatibility
-			if len(volumeLabel) > 32 {
-				volumeLabel = volumeLabel[:32]
-			}
-
 			var host *fuse.FileSystemHost
 			var mountOptions []string
 
 			if opts.readWrite {
 				// Read-write mode
-				rwfs, err := tresor.NewReadWriteFS(containerPath, password, cacheSizeBytes)
-				if err != nil {
-					return fmt.Errorf("create filesystem: %w", err)
-				}
+				rwfs := tresor.NewMemoryFSWithLimit(cacheSizeBytes)
 				defer rwfs.Close()
 
 				host = fuse.NewFileSystemHost(rwfs)
-
-				// Mount options for read-write mode
-				mountOptions = []string{
-					"-o", "allow_other",
-					"-o", fmt.Sprintf("volname=%s", volumeLabel),
-				}
+				mountOptions = buildMountOptions(volumeLabel, true)
 			} else {
 				// Read-only mode
 				rofs, err := tresor.NewReadOnlyFS(containerPath, password, cacheSizeBytes)
@@ -87,17 +69,11 @@ func newMountCmd() *cobra.Command {
 				defer rofs.Close()
 
 				host = fuse.NewFileSystemHost(rofs)
-
-				// Mount options for read-only mode (original settings)
-				mountOptions = []string{
-					"-o", "allow_other",
-					"-o", "uid=500,gid=500",
-					"-o", "FileSystemName=NTFS",
-					"-o", fmt.Sprintf("volname=%s", volumeLabel),
-				}
+				mountOptions = buildMountOptions(volumeLabel, false)
 			}
 
 			os.Setenv("FSP_FUSE_VOLUME_NAME", volumeLabel)
+			// Create mount options with volume label and capacity hints
 
 			mode := "read-only"
 			if opts.readWrite {
@@ -143,6 +119,36 @@ func newMountCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&opts.cacheSize, "cache-size", 0, "Cache size in MB (0 = no cache, default = 0)")
 
 	return cmd
+}
+
+func getVolumeLabel(containerPath string) string {
+	volumeLabel := filepath.Base(containerPath)
+	if strings.HasSuffix(strings.ToLower(volumeLabel), ".tre") {
+		volumeLabel = volumeLabel[:len(volumeLabel)-4]
+	}
+	// Truncate to 32 chars max for Windows compatibility
+	if len(volumeLabel) > 32 {
+		volumeLabel = volumeLabel[:32]
+	}
+	return volumeLabel
+}
+
+func buildMountOptions(volumeLabel string, readWrite bool) []string {
+	if readWrite {
+		return []string{
+			"-f",
+			"-o", "FileSystemName=NTFS",
+			"-o", "FileSecurity=D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;WD)",
+			"-o", fmt.Sprintf("volname=%s", volumeLabel),
+		}
+	}
+
+	return []string{
+		"-o", "allow_other",
+		"-o", "uid=500,gid=500",
+		"-o", "FileSystemName=NTFS",
+		"-o", fmt.Sprintf("volname=%s", volumeLabel),
+	}
 }
 
 func init() {
