@@ -20,7 +20,6 @@ type mountOptions struct {
 	password  string
 	file      string
 	cacheSize int64 // Cache size in MB, 0 = no cache
-	readWrite bool  // Enable read-write mode
 }
 
 func newMountCmd() *cobra.Command {
@@ -28,8 +27,8 @@ func newMountCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "mount <mount-point>",
-		Short: "Mount a tresor container file as a filesystem (read-only or read-write)",
-		Long:  "Mount a tresor container file as a filesystem using FUSE. Use --read-write flag to enable write mode.",
+		Short: "Mount a tresor container file as a read-only filesystem",
+		Long:  "Mount a tresor container file as a read-only filesystem using FUSE.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mountPoint := args[0]
@@ -50,36 +49,19 @@ func newMountCmd() *cobra.Command {
 
 			// Convert cache size from MB to bytes
 			cacheSizeBytes := opts.cacheSize * 1024 * 1024
-			var host *fuse.FileSystemHost
-			var mountOptions []string
 
-			if opts.readWrite {
-				// Read-write mode
-				rwfs := tresor.NewMemoryFSWithLimit(cacheSizeBytes)
-				defer rwfs.Close()
-
-				host = fuse.NewFileSystemHost(rwfs)
-				mountOptions = buildMountOptions(volumeLabel, true)
-			} else {
-				// Read-only mode
-				rofs, err := tresor.NewReadOnlyFS(containerPath, password, cacheSizeBytes)
-				if err != nil {
-					return fmt.Errorf("create filesystem: %w", err)
-				}
-				defer rofs.Close()
-
-				host = fuse.NewFileSystemHost(rofs)
-				mountOptions = buildMountOptions(volumeLabel, false)
+			rofs, err := tresor.NewReadOnlyFS(containerPath, password, cacheSizeBytes)
+			if err != nil {
+				return fmt.Errorf("create filesystem: %w", err)
 			}
+			defer rofs.Close()
+
+			host := fuse.NewFileSystemHost(rofs)
+			mountOptions := buildMountOptions(volumeLabel)
 
 			os.Setenv("FSP_FUSE_VOLUME_NAME", volumeLabel)
-			// Create mount options with volume label and capacity hints
 
-			mode := "read-only"
-			if opts.readWrite {
-				mode = "read-write"
-			}
-			fmt.Printf("mounted %q at %q (%s)\n", containerPath, mountPoint, mode)
+			fmt.Printf("mounted %q at %q (read-only)\n", containerPath, mountPoint)
 			fmt.Println("Press Ctrl+C to unmount")
 			os.Stdout.Sync()
 
@@ -112,7 +94,6 @@ func newMountCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&opts.readWrite, "read-write", "w", false, "Enable read-write mode instead of read-only")
 
 	cmd.Flags().StringVarP(&opts.password, "password", "p", "", "Password used for decryption")
 	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "Container file path (.tre); defaults to tresor.tre")
@@ -133,16 +114,7 @@ func getVolumeLabel(containerPath string) string {
 	return volumeLabel
 }
 
-func buildMountOptions(volumeLabel string, readWrite bool) []string {
-	if readWrite {
-		return []string{
-			"-f",
-			"-o", "FileSystemName=NTFS",
-			"-o", "FileSecurity=D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;WD)",
-			"-o", fmt.Sprintf("volname=%s", volumeLabel),
-		}
-	}
-
+func buildMountOptions(volumeLabel string) []string {
 	return []string{
 		"-o", "allow_other",
 		"-o", "uid=500,gid=500",

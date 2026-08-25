@@ -5,6 +5,9 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
+# Match goreleaser: WinFSP/cgofuse is used via the pure-Go (!cgo) Windows backend.
+$env:CGO_ENABLED = "0"
+
 Write-Host "==> Running go mod tidy"
 go mod tidy
 

@@ -25,17 +25,18 @@ import (
 )
 
 const (
-	headerMagic      uint32 = 0xA16F3D27
-	footerMagic      uint32 = 0x7C9E21B4
-	containerVersion uint16 = 1
-	kdfMemoryKB      uint32 = 64 * 1024
-	kdfIterations    uint32 = 3
-	kdfParallelism   uint8  = 2
-	keySize                 = 32
-	saltSize                = 16
-	chunkSize        uint32 = 64 * 1024
-	aeadTagSize             = 16
-	headerSize              = 31
+	headerMagic         uint32 = 0xA16F3D27
+	footerMagic         uint32 = 0x7C9E21B4
+	containerVersion    uint16 = 1
+	kdfMemoryKB         uint32 = 64 * 1024
+	kdfIterations       uint32 = 3
+	kdfParallelism      uint8  = 2
+	keySize                    = 32
+	saltSize                   = 16
+	chunkSize           uint32 = 64 * 1024
+	aeadTagSize                = 16
+	headerSize                 = 31
+	inMemoryCompressMax int64  = 32 << 20 // compress files up to 32 MiB in RAM
 )
 
 const (
@@ -488,18 +489,18 @@ func encryptSyncProcessEntry(pathFs string, d fs.DirEntry, cwd string, out *os.F
 func encryptSyncProcessFile(absPath, relPath string, info fs.FileInfo, out *os.File, aead cipher.AEAD, index *archiveIndex, pw io.Writer, fileCount *int) error {
 	progressf(pw, "encrypt: processing %s", relPath)
 
-	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	payload, err := preparePayload(absPath)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer payload.cleanup()
 
 	offset, err := out.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
 
-	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
+	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payload.reader, aead)
 	if err != nil {
 		return err
 	}
@@ -508,10 +509,10 @@ func encryptSyncProcessFile(absPath, relPath string, info fs.FileInfo, out *os.F
 		Path:       relPath,
 		Mode:       uint32(info.Mode().Perm()),
 		Type:       entryTypeFile,
-		Size:       originalSize,
+		Size:       payload.originalSize,
 		ModTime:    info.ModTime().Unix(),
-		StoredSize: storedSize,
-		Compressed: compressed,
+		StoredSize: payload.storedSize,
+		Compressed: payload.compressed,
 		DataOffset: uint64(offset),
 		DataLength: dataLen,
 		ChunkCount: chunkCount,
@@ -576,21 +577,14 @@ func encryptSyncProcessEntryMulti(pathFs string, d fs.DirEntry, cwd string, cw *
 func encryptSyncProcessFileMulti(absPath, relPath string, info fs.FileInfo, cw *containerWriter, hdr containerHeader, aead cipher.AEAD, index *archiveIndex, pw io.Writer, fileCount *int) error {
 	progressf(pw, "encrypt: processing %s", relPath)
 
-	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	payload, err := preparePayload(absPath)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-
-	// Get info file to estimate encrypted size (worst case: no compression)
-	payloadInfo, err := os.Stat(payloadPath)
-	if err != nil {
-		return err
-	}
-	payloadSize := payloadInfo.Size()
+	defer payload.cleanup()
 
 	// Estimate encrypted size: each chunk is (chunkSize + 16-byte AEAD tag)
-	estimatedEncryptedSize := ((payloadSize + int64(chunkSize) - 1) / int64(chunkSize)) * (int64(chunkSize) + 16)
+	estimatedEncryptedSize := ((payload.storedSize + int64(chunkSize) - 1) / int64(chunkSize)) * (int64(chunkSize) + 16)
 
 	// If this file doesn't fit in current container, switch to next
 	if cw.maxSize > 0 && cw.currentSize+estimatedEncryptedSize > cw.maxSize {
@@ -609,7 +603,7 @@ func encryptSyncProcessFileMulti(absPath, relPath string, info fs.FileInfo, cw *
 	}
 
 	// Encrypt file data (stays in current container)
-	dataLen, chunkCount, nonceSeed, err := encryptFileDataMulti(payloadPath, cw, hdr, aead)
+	dataLen, chunkCount, nonceSeed, err := encryptFileDataMulti(payload.reader, cw, hdr, aead)
 	if err != nil {
 		return err
 	}
@@ -618,10 +612,10 @@ func encryptSyncProcessFileMulti(absPath, relPath string, info fs.FileInfo, cw *
 		Path:           relPath,
 		Mode:           uint32(info.Mode().Perm()),
 		Type:           entryTypeFile,
-		Size:           originalSize,
+		Size:           payload.originalSize,
 		ModTime:        info.ModTime().Unix(),
-		StoredSize:     storedSize,
-		Compressed:     compressed,
+		StoredSize:     payload.storedSize,
+		Compressed:     payload.compressed,
 		DataOffset:     uint64(offset),
 		DataLength:     dataLen,
 		ChunkCount:     chunkCount,
@@ -634,15 +628,7 @@ func encryptSyncProcessFileMulti(absPath, relPath string, info fs.FileInfo, cw *
 
 // encryptFileDataMulti writes encrypted file data to current container
 // File stays in current container - caller handles container switching
-func encryptFileDataMulti(sourcePath string, cw *containerWriter, hdr containerHeader, aead cipher.AEAD) (uint64, uint32, [8]byte, error) {
-	in, err := os.Open(sourcePath)
-	if err != nil {
-		return 0, 0, [8]byte{}, fmt.Errorf("open %q: %w", sourcePath, err)
-	}
-	defer func() {
-		_ = in.Close()
-	}()
-
+func encryptFileDataMulti(in io.Reader, cw *containerWriter, hdr containerHeader, aead cipher.AEAD) (uint64, uint32, [8]byte, error) {
 	var seed [8]byte
 	if _, err := rand.Read(seed[:]); err != nil {
 		return 0, 0, [8]byte{}, err
@@ -658,7 +644,7 @@ func encryptFileDataMulti(sourcePath string, cw *containerWriter, hdr containerH
 			break
 		}
 		if readErr != nil && readErr != io.ErrUnexpectedEOF {
-			return 0, 0, [8]byte{}, fmt.Errorf("read %q: %w", sourcePath, readErr)
+			return 0, 0, [8]byte{}, fmt.Errorf("read payload: %w", readErr)
 		}
 
 		if n < int(chunkSize) {
@@ -890,18 +876,18 @@ func encryptAppendProcessFile(absPath, relPath string, info fs.FileInfo, out *os
 
 	progressf(pw, "encrypt append: processing %s", targetPath)
 
-	payloadPath, originalSize, storedSize, compressed, cleanup, err := preparePayload(absPath)
+	payload, err := preparePayload(absPath)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer payload.cleanup()
 
 	offset, err := out.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
 
-	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payloadPath, aead)
+	dataLen, chunkCount, nonceSeed, err := encryptFileData(out, payload.reader, aead)
 	if err != nil {
 		return err
 	}
@@ -910,10 +896,10 @@ func encryptAppendProcessFile(absPath, relPath string, info fs.FileInfo, out *os
 		Path:       targetPath,
 		Mode:       uint32(info.Mode().Perm()),
 		Type:       entryTypeFile,
-		Size:       originalSize,
+		Size:       payload.originalSize,
 		ModTime:    info.ModTime().Unix(),
-		StoredSize: storedSize,
-		Compressed: compressed,
+		StoredSize: payload.storedSize,
+		Compressed: payload.compressed,
 		DataOffset: uint64(offset),
 		DataLength: dataLen,
 		ChunkCount: chunkCount,
@@ -1647,15 +1633,7 @@ func isInteractiveTerminal() bool {
 	return (stdinInfo.Mode()&os.ModeCharDevice) != 0 && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
 }
 
-func encryptFileData(out *os.File, sourcePath string, aead cipher.AEAD) (uint64, uint32, [8]byte, error) {
-	in, err := os.Open(sourcePath)
-	if err != nil {
-		return 0, 0, [8]byte{}, fmt.Errorf("open %q: %w", sourcePath, err)
-	}
-	defer func() {
-		_ = in.Close()
-	}()
-
+func encryptFileData(out *os.File, in io.Reader, aead cipher.AEAD) (uint64, uint32, [8]byte, error) {
 	var seed [8]byte
 	if _, err := rand.Read(seed[:]); err != nil {
 		return 0, 0, [8]byte{}, err
@@ -1671,7 +1649,7 @@ func encryptFileData(out *os.File, sourcePath string, aead cipher.AEAD) (uint64,
 			break
 		}
 		if readErr != nil && readErr != io.ErrUnexpectedEOF {
-			return 0, 0, [8]byte{}, fmt.Errorf("read %q: %w", sourcePath, readErr)
+			return 0, 0, [8]byte{}, fmt.Errorf("read payload: %w", readErr)
 		}
 
 		if n < int(chunkSize) {
@@ -1827,21 +1805,85 @@ func progressf(w io.Writer, format string, args ...any) {
 	fmt.Fprintf(w, format+"\n", args...)
 }
 
-func preparePayload(sourcePath string) (payloadPath string, originalSize int64, storedSize int64, compressed bool, cleanup func(), err error) {
-	// Default cleanup function does nothing; will be replaced if a temp file is created.
-	cleanup = func() {
-		// no-op
+var errCompressionNotSmaller = errors.New("compressed payload is not smaller")
+
+type preparedPayload struct {
+	reader       io.Reader
+	originalSize int64
+	storedSize   int64
+	compressed   bool
+	cleanup      func()
+}
+
+// capWriter stops gzip once the output would no longer be smaller than the original.
+type capWriter struct {
+	w     io.Writer
+	n     int64
+	limit int64
+}
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if c.n+int64(len(p)) >= c.limit {
+		return 0, errCompressionNotSmaller
 	}
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func preparePayload(sourcePath string) (preparedPayload, error) {
+	return preparePayloadWithLimit(sourcePath, inMemoryCompressMax)
+}
+
+func preparePayloadWithLimit(sourcePath string, memoryLimit int64) (preparedPayload, error) {
 	info, err := os.Stat(sourcePath)
 	if err != nil {
-		return "", 0, 0, false, cleanup, fmt.Errorf("stat %q: %w", sourcePath, err)
+		return preparedPayload{}, fmt.Errorf("stat %q: %w", sourcePath, err)
 	}
-	originalSize = info.Size()
-	storedSize = originalSize
+	originalSize := info.Size()
+	if originalSize == 0 {
+		return openUncompressedPayload(sourcePath, originalSize)
+	}
+	if originalSize <= memoryLimit {
+		return preparePayloadInMemory(sourcePath, originalSize)
+	}
+	return preparePayloadTempFile(sourcePath, originalSize)
+}
 
+func preparePayloadInMemory(sourcePath string, originalSize int64) (preparedPayload, error) {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return preparedPayload{}, fmt.Errorf("read %q: %w", sourcePath, err)
+	}
+
+	var compressed bytes.Buffer
+	err = compressIfSmaller(bytes.NewReader(data), &compressed, originalSize)
+	if errors.Is(err, errCompressionNotSmaller) {
+		return preparedPayload{
+			reader:       bytes.NewReader(data),
+			originalSize: originalSize,
+			storedSize:   originalSize,
+			compressed:   false,
+			cleanup:      func() {},
+		}, nil
+	}
+	if err != nil {
+		return preparedPayload{}, fmt.Errorf("compress %q: %w", sourcePath, err)
+	}
+
+	return preparedPayload{
+		reader:       bytes.NewReader(compressed.Bytes()),
+		originalSize: originalSize,
+		storedSize:   int64(compressed.Len()),
+		compressed:   true,
+		cleanup:      func() {},
+	}, nil
+}
+
+func preparePayloadTempFile(sourcePath string, originalSize int64) (preparedPayload, error) {
 	in, err := os.Open(sourcePath)
 	if err != nil {
-		return "", 0, 0, false, cleanup, fmt.Errorf("open %q: %w", sourcePath, err)
+		return preparedPayload{}, fmt.Errorf("open %q: %w", sourcePath, err)
 	}
 	defer func() {
 		_ = in.Close()
@@ -1849,50 +1891,77 @@ func preparePayload(sourcePath string) (payloadPath string, originalSize int64, 
 
 	tmp, err := os.CreateTemp("", "tresor-compress-*")
 	if err != nil {
-		return "", 0, 0, false, cleanup, fmt.Errorf("create temp compression file: %w", err)
+		return preparedPayload{}, fmt.Errorf("create temp compression file: %w", err)
 	}
 	tmpName := tmp.Name()
-	cleanup = func() {
+	cleanupTmp := func() {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 	}
 
-	zw, err := gzip.NewWriterLevel(tmp, gzip.BestSpeed)
+	err = compressIfSmaller(in, tmp, originalSize)
+	if errors.Is(err, errCompressionNotSmaller) {
+		cleanupTmp()
+		return openUncompressedPayload(sourcePath, originalSize)
+	}
 	if err != nil {
-		cleanup()
-		return "", 0, 0, false, cleanup, fmt.Errorf("create gzip writer: %w", err)
-	}
-
-	if _, err := io.Copy(zw, in); err != nil {
-		_ = zw.Close()
-		cleanup()
-		return "", 0, 0, false, cleanup, fmt.Errorf("compress %q: %w", sourcePath, err)
-	}
-	if err := zw.Close(); err != nil {
-		cleanup()
-		return "", 0, 0, false, cleanup, fmt.Errorf("finalize compression for %q: %w", sourcePath, err)
+		cleanupTmp()
+		return preparedPayload{}, fmt.Errorf("compress %q: %w", sourcePath, err)
 	}
 
 	compressedInfo, err := tmp.Stat()
 	if err != nil {
-		cleanup()
-		return "", 0, 0, false, cleanup, fmt.Errorf("stat compressed data for %q: %w", sourcePath, err)
+		cleanupTmp()
+		return preparedPayload{}, fmt.Errorf("stat compressed data for %q: %w", sourcePath, err)
 	}
 
-	if compressedInfo.Size() >= originalSize {
-		cleanup()
-		return sourcePath, originalSize, originalSize, false, cleanup, nil
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		cleanupTmp()
+		return preparedPayload{}, fmt.Errorf("seek compressed temp for %q: %w", sourcePath, err)
 	}
 
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return "", 0, 0, false, cleanup, fmt.Errorf("close compressed temp for %q: %w", sourcePath, err)
-	}
+	return preparedPayload{
+		reader:       tmp,
+		originalSize: originalSize,
+		storedSize:   compressedInfo.Size(),
+		compressed:   true,
+		cleanup: func() {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		},
+	}, nil
+}
 
-	cleanup = func() {
-		_ = os.Remove(tmpName)
+func openUncompressedPayload(sourcePath string, originalSize int64) (preparedPayload, error) {
+	f, err := os.Open(sourcePath)
+	if err != nil {
+		return preparedPayload{}, fmt.Errorf("open %q: %w", sourcePath, err)
 	}
-	return tmpName, originalSize, compressedInfo.Size(), true, cleanup, nil
+	return preparedPayload{
+		reader:       f,
+		originalSize: originalSize,
+		storedSize:   originalSize,
+		compressed:   false,
+		cleanup: func() {
+			_ = f.Close()
+		},
+	}, nil
+}
+
+func compressIfSmaller(r io.Reader, w io.Writer, originalSize int64) error {
+	zw, err := gzip.NewWriterLevel(&capWriter{w: w, limit: originalSize}, gzip.BestSpeed)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(zw, r)
+	closeErr := zw.Close()
+	if errors.Is(copyErr, errCompressionNotSmaller) || errors.Is(closeErr, errCompressionNotSmaller) {
+		return errCompressionNotSmaller
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func buildAEAD(password string, hdr containerHeader) (cipher.AEAD, error) {

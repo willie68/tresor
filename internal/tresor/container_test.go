@@ -237,6 +237,127 @@ func TestCompressionDecisionInIndex(t *testing.T) {
 	})
 }
 
+func TestPreparePayloadInMemoryCompresses(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "repeat.txt")
+	original := bytes.Repeat([]byte("AAAAAAAA"), 2048)
+	if err := os.WriteFile(src, original, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	payload, err := preparePayloadWithLimit(src, int64(len(original)))
+	if err != nil {
+		t.Fatalf("preparePayload: %v", err)
+	}
+	data := readPrepared(t, payload)
+
+	if !payload.compressed {
+		t.Fatal("expected in-memory compression")
+	}
+	if _, ok := payload.reader.(*bytes.Reader); !ok {
+		t.Fatalf("expected *bytes.Reader for in-memory payload, got %T", payload.reader)
+	}
+	if payload.storedSize <= 0 || payload.storedSize >= int64(len(original)) {
+		t.Fatalf("stored size = %d, original = %d", payload.storedSize, len(original))
+	}
+	if int64(len(data)) != payload.storedSize {
+		t.Fatalf("read %d bytes, storedSize %d", len(data), payload.storedSize)
+	}
+	if data[0] != 0x1f || data[1] != 0x8b {
+		t.Fatal("compressed payload missing gzip magic")
+	}
+}
+
+func TestPreparePayloadInMemorySkipsIncompressible(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "random.bin")
+	original := make([]byte, 32*1024)
+	if _, err := crand.Read(original); err != nil {
+		t.Fatalf("generate random bytes: %v", err)
+	}
+	if err := os.WriteFile(src, original, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	payload, err := preparePayloadWithLimit(src, int64(len(original)))
+	if err != nil {
+		t.Fatalf("preparePayload: %v", err)
+	}
+	data := readPrepared(t, payload)
+
+	if payload.compressed {
+		t.Fatal("expected incompressible data to stay uncompressed")
+	}
+	if payload.storedSize != int64(len(original)) {
+		t.Fatalf("stored size = %d, want %d", payload.storedSize, len(original))
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatal("uncompressed payload does not match original file")
+	}
+}
+
+func TestPreparePayloadEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(src, nil, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	payload, err := preparePayload(src)
+	if err != nil {
+		t.Fatalf("preparePayload: %v", err)
+	}
+	data := readPrepared(t, payload)
+
+	if payload.compressed {
+		t.Fatal("empty file should not be compressed")
+	}
+	if payload.originalSize != 0 || payload.storedSize != 0 {
+		t.Fatalf("sizes = original %d stored %d, want 0", payload.originalSize, payload.storedSize)
+	}
+	if len(data) != 0 {
+		t.Fatalf("read %d bytes from empty payload", len(data))
+	}
+}
+
+func TestPreparePayloadTempFileFallbackCompresses(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "large-repeat.txt")
+	original := bytes.Repeat([]byte("BBBBBBBB"), 4096) // 32 KiB, above a tiny memory limit
+	if err := os.WriteFile(src, original, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	payload, err := preparePayloadWithLimit(src, 1024)
+	if err != nil {
+		t.Fatalf("preparePayload: %v", err)
+	}
+	data := readPrepared(t, payload)
+
+	if !payload.compressed {
+		t.Fatal("expected temp-file compression for payload above memory limit")
+	}
+	if _, ok := payload.reader.(*os.File); !ok {
+		t.Fatalf("expected *os.File for temp-file payload, got %T", payload.reader)
+	}
+	if payload.storedSize >= int64(len(original)) {
+		t.Fatalf("stored size %d not smaller than original %d", payload.storedSize, len(original))
+	}
+	if data[0] != 0x1f || data[1] != 0x8b {
+		t.Fatal("compressed payload missing gzip magic")
+	}
+}
+
+func readPrepared(t *testing.T, payload preparedPayload) []byte {
+	t.Helper()
+	defer payload.cleanup()
+	data, err := io.ReadAll(payload.reader)
+	if err != nil {
+		t.Fatalf("read payload: %v", err)
+	}
+	return data
+}
+
 func TestDecryptConflictIgnore(t *testing.T) {
 	tempDir := t.TempDir()
 	withWorkingDir(t, tempDir, func() {
