@@ -16,9 +16,9 @@ Common flags available across all commands:
 ### Encrypt
 
 ```bash
-tresor encrypt --remove mongodump\ minio\
-tresor encrypt --file e:\temp\meintresor.tre mongodump\ minio\
-tresor encrypt -p mypass -f archive.tre -r mongodump\ minio\  # Using short flags
+tresor encrypt --remove secrets\ secrets_old\
+tresor encrypt --file e:\temp\secretsfile.tre secrets\
+tresor encrypt -p mypass -f secretsfile.tre -r secrets\  # Using short flags
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -33,8 +33,8 @@ If `--file` is omitted, `tresor.tre` in the current directory is used.
 If the target container already exists, use `--if-exists`:
 
 ```bash
-tresor encrypt --file e:\temp\meintresor.tre --if-exists sync mongodump\ minio\
-tresor encrypt --file e:\temp\meintresor.tre --if-exists append mongodump\ minio\
+tresor encrypt --file e:\temp\secretsfile.tre --if-exists sync secrets\
+tresor encrypt --file e:\temp\secretsfile.tre --if-exists append secrets\
 ```
 
 - `sync`: resulting container reflects the current input folders
@@ -43,17 +43,17 @@ tresor encrypt --file e:\temp\meintresor.tre --if-exists append mongodump\ minio
 For append conflicts, use `--on-conflict` (also for non-interactive runs):
 
 ```bash
-tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict ignore mongodump\
-tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict overwrite mongodump\
-tresor encrypt --file e:\temp\meintresor.tre --if-exists append --on-conflict rename mongodump\
+tresor encrypt --file e:\temp\secretsfile.tre --if-exists append --on-conflict ignore secrets\
+tresor encrypt --file e:\temp\secretsfile.tre --if-exists append --on-conflict overwrite secrets\
+tresor encrypt --file e:\temp\secretsfile.tre --if-exists append --on-conflict rename secrets\
 ```
 
 For automated scenarios with password:
 
 ```bash
-tresor encrypt --password <mein-passwort> --remove mongodump\ minio\
-tresor encrypt -p <mein-passwort> -r mongodump\ minio\  # Using short flags
-tresor encrypt --password <mein-passwort> --remove --secure-remove mongodump\ minio\  # Secure deletion
+tresor encrypt --password <mein-passwort> --remove secrets\
+tresor encrypt -p <mein-passwort> -r secrets\  # Using short flags
+tresor encrypt --password <mein-passwort> --remove --secure-remove secrets\  # Secure deletion
 ```
 
 #### Multi-Container Encryption
@@ -61,14 +61,14 @@ tresor encrypt --password <mein-passwort> --remove --secure-remove mongodump\ mi
 For large archives, you can split data across multiple container files using `--max-size`:
 
 ```bash
-tresor encrypt --max-size 100 --remove mongodump\ minio\
-tresor encrypt --file archive.tre --max-size 500 mongodump\
+tresor encrypt --max-size 100 --remove secrets\
+tresor encrypt --file secretsfile.tre --max-size 500 secrets\
 ```
 
 **How it works:**
 
 - `--max-size`: Maximum target size for each container file in MB (default: 0 = unlimited, all data in single file)
-- When specified, creates a main container (`archive.tre`) plus sidecar files (`archive.tre.000`, `archive.tre.001`, etc.)
+- When specified, creates a main container (`secretsfile.tre`) plus sidecar files (`secretsfile.tre.000`, `secretsfile.tre.001`, etc.)
 - Each complete file is written to a single container - **files never split across containers**
 - Container switching happens between files: if the next file won't fit, encrypt switches to a new container
 - **Important:** Individual files larger than `--max-size` are always written completely to their container (containers may exceed the size limit to keep files intact)
@@ -94,14 +94,14 @@ file4.bin (50 MB) → Container 2 (.001)        [50 MB]
 Multi-container archives decrypt transparently - just point to the main `.tre` file and all sidecar containers are automatically detected and read:
 
 ```bash
-tresor decrypt --file archive.tre    # Automatically reads archive.tre.000, archive.tre.001, etc.
+tresor decrypt --file secretsfile.tre    # Automatically reads secretsfile.tre.000, secretsfile.tre.001, etc.
 ```
 
 ### Decrypt
 
 ```bash
 tresor decrypt --remove
-tresor decrypt --file e:\temp\meintresor.tre
+tresor decrypt --file e:\temp\secretsfile.tre
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -114,9 +114,9 @@ If `--file` is omitted, `tresor.tre` in the current directory is used.
 If files already exist during decrypt, use `--on-conflict` to define behavior:
 
 ```bash
-tresor decrypt --file e:\temp\meintresor.tre --on-conflict ignore
-tresor decrypt --file e:\temp\meintresor.tre --on-conflict overwrite
-tresor decrypt --file e:\temp\meintresor.tre --on-conflict rename
+tresor decrypt --file e:\temp\secretsfile.tre --on-conflict ignore
+tresor decrypt --file e:\temp\secretsfile.tre --on-conflict overwrite
+tresor decrypt --file e:\temp\secretsfile.tre --on-conflict rename
 ```
 
 Default is `--on-conflict prompt`.
@@ -125,11 +125,11 @@ Default is `--on-conflict prompt`.
 
 ```bash
 tresor list
-tresor list --file e:\temp\meintresor.tre
+tresor list --file e:\temp\secretsfile.tre
 tresor list --filter ".jpg"              # All JPG files (case-insensitive)
 tresor list --filter "rep*"              # Files starting with 'rep' (glob pattern)
-tresor list --filter "input/"            # Files in input directory and subdirectories
-tresor list --filter "/input/"           # Files directly in root input directory
+tresor list --filter "secrets/"          # Files in secrets directory and subdirectories
+tresor list --filter "/secrets/"         # Files directly in root secrets directory
 ```
 
 **Filter patterns** (case-insensitive):
@@ -140,9 +140,9 @@ tresor list --filter "/input/"           # Files directly in root input director
 | `*.jpg` | Files ending with `.jpg` (wildcard) | `photo.jpg`, `image.JPG` |
 | `rep*` | Files matching glob pattern | `replace_0000.jpg`, `report.pdf`, `report_2024.txt` |
 | `file*.txt` | Glob pattern with prefix and suffix | `file001.txt`, `file_backup.txt` |
-| `input` | Files containing "input" anywhere | `input`, `input/file.txt`, `my_input_file.pdf` |
-| `input/` | Files in directory (including subdirs) | `input/config.ini`, `input/nested/file.txt` |
-| `/input/` | Files directly in root directory only | `input/config.ini`, but NOT `input/nested/file.txt` |
+| `secrets` | Files containing "secrets" anywhere | `secrets`, `secrets/file.txt`, `my_secrets_file.pdf` |
+| `secrets/` | Files in directory (including subdirs) | `secrets/config.ini`, `secrets/nested/file.txt` |
+| `/secrets/` | Files directly in root directory only | `secrets/config.ini`, but NOT `secrets/nested/file.txt` |
 | `readme.pdf` | Exact filename (any location) | `readme.pdf`, `docs/readme.pdf` |
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -153,30 +153,27 @@ The output format is platform-specific for native familiarity:
 ```
 Mode                 LastWriteTime         Length Name
 ----                 -------------         ------ ----
-d-----        10.07.2026     09:39                input
-d-----        09.07.2026     10:19                output
--a----        10.07.2026     09:45           4644 manual_test.go
--a----        10.07.2026     09:45              5 neu.txt
-             2 File(s) 8935936 bytes
-             2 Dir(s)
+d-----        10.07.2026     09:39                secrets
+-a----        10.07.2026     09:45           4644 notes.txt
+-a----        10.07.2026     09:45              5 key.pem
+             2 File(s) 4649 bytes
+             1 Dir(s)
 ```
 
 **Linux/Unix:**
 ```
-drwxr-xr-x 1 user group                  Oct 10 09:39 input
-drwxr-xr-x 1 user group                  Oct 09 10:19 output
--rw-r--r-- 1 user group        4644      Oct 10 09:45 manual_test.go
--rw-r--r-- 1 user group           5      Oct 10 09:45 neu.txt
-total 4
+drwxr-xr-x 1 user group                  Oct 10 09:39 secrets
+-rw-r--r-- 1 user group        4644      Oct 10 09:45 notes.txt
+-rw-r--r-- 1 user group           5      Oct 10 09:45 key.pem
+total 2
 ```
 
 **macOS (Darwin):**
 ```
-drwxr-xr-x 1 user group                  Oct 10 09:39 input
-drwxr-xr-x 1 user group                  Oct 09 10:19 output
--rw-r--r-- 1 user group        4644      Oct 10 09:45 manual_test.go
--rw-r--r-- 1 user group           5      Oct 10 09:45 neu.txt
-total 4
+drwxr-xr-x 1 user group                  Oct 10 09:39 secrets
+-rw-r--r-- 1 user group        4644      Oct 10 09:45 notes.txt
+-rw-r--r-- 1 user group           5      Oct 10 09:45 key.pem
+total 2
 ```
 
 Output automatically adapts to the operating system for familiar formatting.
@@ -184,10 +181,10 @@ Output automatically adapts to the operating system for familiar formatting.
 ### Extract
 
 ```bash
-tresor extract input/bilder/text.txt                              # Extract single file
-tresor extract input/bilder                                       # Extract directory (flat)
-tresor extract input/bilder --force-dirs                          # Extract directory (preserve structure)
-tresor extract input/bilder --file e:\temp\meintresor.tre         # Extract from specific container
+tresor extract secrets/notes.txt                                  # Extract single file
+tresor extract secrets                                            # Extract directory (flat)
+tresor extract secrets --force-dirs                               # Extract directory (preserve structure)
+tresor extract secrets --file e:\temp\secretsfile.tre             # Extract from specific container
 ```
 
 If `--file` is omitted, `tresor.tre` in the current directory is used.
@@ -202,7 +199,7 @@ If files already exist during extract, use `--on-conflict` to define behavior (s
 
 ```bash
 tresor mount x:
-tresor mount y: --file e:\temp\meintresor.tre
+tresor mount y: --file e:\temp\secretsfile.tre
 tresor mount z: --cache-size 100              # With 100 MB file cache
 ```
 
@@ -237,7 +234,7 @@ tresor mount x:
 
 # Navigate and read files
 dir x:\\                    # List container contents
-type x:\\input\\file.txt    # Read a specific file
+type x:\\secrets\\notes.txt # Read a specific file
 
 # Unmount by pressing Ctrl+C
 ```
@@ -375,12 +372,12 @@ Debug configurations are available in `.vscode/launch.json`:
 - `tresor: encrypt`
 - `tresor: decrypt`
 
-Included sample data:
+Example paths used by the debug configs:
 
-- `testdata/input/mongodump/dump-001.bson`
-- `testdata/input/minio/bucket-a/object-001.txt`
+- Input directory: `secrets\`
+- Container file: `secretsfile.tre`
 
-The encrypt debug config writes `testdata/vault.tre`. The decrypt debug config restores files into `testdata/output`.
+The encrypt debug config writes `secretsfile.tre`. The decrypt debug config restores files into the working directory.
 
 ## Release
 

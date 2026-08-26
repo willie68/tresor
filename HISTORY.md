@@ -21,7 +21,7 @@
     - `-r` (short for `--remove`)
     - `-h` (short for `--help`)
   - Available across all commands: encrypt, decrypt, list, extract, mount
-  - Example: `tresor list -p mypass -f archive.tre --filter ".jpg"`
+  - Example: `tresor list -p mypass -f secretsfile.tre --filter ".jpg"`
 
 - **Documentation Updates**
   - Updated README with global flags section and short flag examples
