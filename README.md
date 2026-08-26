@@ -1,7 +1,7 @@
 # tresor
 Small command-line tool for encrypting and decrypting directory trees into a `.tre` container file.
 
-Current release: `v0.14.0`
+Current release: `v0.15.1`
 
 ## Commands
 
@@ -253,60 +253,9 @@ tresor version
 
 Shows version, a short about text, and a license hint.
 
-## Resolved Issues In v0.10.0
+## Changelog
 
-- File cache implementation: Added configurable in-memory cache for FUSE filesystem with LRU eviction
-- Mount cache parameter: New `--cache-size` flag (in MB) for optional file caching
-- Cache tests: Comprehensive test suite covering normal operations, edge cases, and eviction behavior
-- Filesystem cache integration: ReadOnlyFS now supports optional caching for improved performance
-
-## Resolved Issues In v0.8.1
-
-- New `mount` command: Mount tresor container as read-only FUSE filesystem for transparent file access
-- Fixed mount output buffering: Messages now display immediately (not deferred)
-- Fixed Ctrl+C exit handling: Single press now properly unmounts and exits
-- Implemented proper FUSE Read() callback: Full file decryption and serving via filesystem
-- Compressed file support: Added gzip decompression for transparent access to compressed files
-- Fixed small file read corruption: Binary garbage now properly decrypts and decompresses
-- Fixed file truncation: Read() now correctly handles decompressed vs. stored file sizes
-- Thread-safety improvements: Mutex protection for concurrent FUSE reads
-
-## Resolved Issues In v0.7.4
-
-- Platform-specific `list` command output format: Windows displays PowerShell-style dir format, Linux/Unix shows `ls -l` style, macOS (Darwin) shows native `ls -l` format for consistent user experience on each platform.
-
-## Resolved Issues In v0.7.3
-
-- Improved `list` command output format: Now displays in PowerShell-style table format with Mode, LastWriteTime, Length, and Name columns for better readability and familiarity to Windows users.
-
-## Resolved Issues In v0.7.2
-
-- Security documentation added: Comprehensive brute-force resistance analysis with test results showing Argon2id KDF effectiveness.
-- Brute-force test (`TestBruteForceResistance`): Demonstrates that 15 weak passwords all fail, confirming KDF protection (~100-500ms per attempt).
-
-## Resolved Issues In v0.7.1
-
-- Single source of truth for version number: Release version is injected via ldflags from git tag during build.
-- Modification times displayed in list command in `YYYY-MM-DD HH:MM:SS` format.
-- New `extract` command for selective extraction of individual files or subdirectories.
-- Optional `--file` flag across all commands (defaults to `tresor.tre`).
-- Early validation of container file and command flags before password prompt.
-- Interactive password input as default (--password flag only for automation).
-- #3: Modified `list` command now displays modification times in `YYYY-MM-DD HH:MM:SS` format.
-- Made `--file` flag optional for `encrypt`, `decrypt`, and `list` commands; defaults to `tresor.tre` in the current directory.
-- Argument validation (file existence, flag values) now occurs before password prompt.
-- New `extract` command: Extract individual files or subdirectories from container with optional `--force-dirs` for preserving directory structure.
-
-## Resolved Issues In v0.5.0
-
-- #3: Added ModTime (modification time) preservation in encrypt/decrypt round trip. **Non-backward-compatible**: old containers lack ModTime data.
-
-## Resolved Issues In v0.4.0
-
-- #1: Added progress output for encrypt and decrypt.
-- #2: Added summary output to `list` (files, dirs, total bytes).
-
-Current state: recursive encryption/decryption is implemented for regular files and directories.
+See [HISTORY.md](HISTORY.md) for the full release history.
 
 ## Container Format (v1)
 
